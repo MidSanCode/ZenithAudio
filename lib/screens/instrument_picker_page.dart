@@ -99,7 +99,12 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
     if (_previewCache.containsKey(id)) {
       wavBytes = _previewCache[id]!;
     } else {
-      wavBytes = _synth.renderPreviewWav(inst, pitch: 72, duration: 0.8, velocity: 100);
+      wavBytes = _synth.renderPreviewWav(
+        inst,
+        pitch: _previewPitchFor(inst),
+        duration: 1.6,
+        velocity: 100,
+      );
       _previewCache[id] = wavBytes;
     }
 
@@ -107,6 +112,22 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
       await _playPreviewWeb(wavBytes, id);
     } else {
       await _playPreviewDesktop(wavBytes, id);
+    }
+  }
+
+  /// Audition each instrument in its own comfortable register so family
+  /// timbre (bass warmth, wind breathiness) is actually audible.
+  int _previewPitchFor(InstrumentPreset inst) {
+    switch (inst.category) {
+      case InstrumentCategory.string:
+        // GM programs 32-39 are the bass family — two octaves below C4.
+        return (inst.programNumber >= 32 && inst.programNumber <= 39)
+            ? 40 // E2
+            : 57; // A3
+      case InstrumentCategory.wind:
+        return 62; // D4
+      default:
+        return 60; // C4
     }
   }
 

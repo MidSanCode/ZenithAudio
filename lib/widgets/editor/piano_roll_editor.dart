@@ -428,7 +428,7 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
     final track = _track;
     if (track.instrumentName == null || _disposed) return;
     final inst = InstrumentPreset.fromId(track.instrumentName!);
-    final wav = _synth.renderPreviewWav(inst, pitch: pitch, duration: 0.3, velocity: 100);
+    final wav = _synth.renderPreviewWav(inst, pitch: pitch, duration: 0.9, velocity: 100);
 
     final dir = await getTemporaryDirectory();
     if (_disposed) return;
@@ -444,7 +444,7 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
     if (_disposed) return;
     _previewTrackId = previewId;
     await audio.playSingleTrack(previewId);
-    Future.delayed(const Duration(milliseconds: 400), () {
+    Future.delayed(const Duration(milliseconds: 1000), () {
       if (!_disposed) _stopPreview();
     });
   }
