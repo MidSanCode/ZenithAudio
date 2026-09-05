@@ -65,9 +65,14 @@ include(flutter/generated_plugins.cmake)
 set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
 # Make the "install" step default, as it's required to run.
 set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-  set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
-endif()
+# The install prefix must always point at the build output dir: the
+# INSTALL target assembles the runnable bundle there (flutter run / VS F5
+# both depend on it). Force it unconditionally so a stale or polluted
+# CMakeCache.txt (e.g. prefix already set to the CMake default
+# "C:/Program Files/<name>" from an earlier out-of-band configure) can
+# never make the INSTALL step try to write into Program Files, which
+# fails with MSB3073 under a non-admin build.
+set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
 
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
