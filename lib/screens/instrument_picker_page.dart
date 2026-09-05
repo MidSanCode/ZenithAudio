@@ -120,9 +120,13 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
     _previewDisposed = false;
     if (mounted) setState(() => _previewingId = id);
 
-    // Auto-stop on completion
-    player.stream.completed.listen((_) {
-      _onPreviewEnd(id, player, filePath);
+    // Auto-stop on completion.
+    // media_kit emits `completed=false` while open() resets the internal
+    // playlist; only react to actual playback completion (true).
+    player.stream.completed.listen((completed) {
+      if (completed) {
+        _onPreviewEnd(id, player, filePath);
+      }
     });
     player.stream.error.listen((_) {
       _onPreviewEnd(id, player, filePath);
@@ -150,6 +154,10 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
   }
 
   Future<void> _playPreviewWeb(Uint8List wavBytes, String id) async {
+    // NOTE: web is currently a stub — no audible playback. This file imports
+    // dart:io unconditionally, so it cannot compile for web targets anyway;
+    // making web audible would require moving File IO behind conditional
+    // imports first.
     setState(() => _previewingId = id);
     await Future.delayed(const Duration(milliseconds: 900));
     if (mounted && _previewingId == id) {
