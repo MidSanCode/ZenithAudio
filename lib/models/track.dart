@@ -3,7 +3,7 @@ import '../core/constants/app_constants.dart';
 import '../models/note.dart';
 import '../services/synth_engine.dart' show TrackCompressorParams;
 
-enum TrackType { audio, instrument }
+enum TrackType { audio, instrument, synth }
 
 class Track {
   final String id;
@@ -23,6 +23,11 @@ class Track {
   /// Per-track compressor (instrument tracks; null = disabled).
   final TrackCompressorParams? compressor;
 
+  /// True for note-based tracks (instrument or synth) — they carry notes +
+  /// an instrumentName preset and render through the synth pipeline.
+  bool get isInstrument =>
+      type == TrackType.instrument || type == TrackType.synth;
+
   const Track({
     required this.id,
     required this.name,
@@ -41,7 +46,7 @@ class Track {
   });
 
   double get computedDuration {
-    if (type == TrackType.instrument && notes.isNotEmpty) {
+    if (isInstrument && notes.isNotEmpty) {
       final last = notes.last;
       return last.startTime + last.duration;
     }

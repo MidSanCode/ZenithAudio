@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/project.dart';
 import '../models/track.dart';
 import '../models/note.dart';
+import '../models/instrument.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
 import '../services/audio_service.dart';
@@ -393,10 +394,17 @@ class ProjectNotifier extends Notifier<Project> {
     _pushUndo();
     _markDirty();
     final trackColors = _trackColors();
+    // Synth-family presets get their own track type so the UI can
+    // distinguish them; they still share the note/render pipeline.
+    final presetId = instrumentName ?? 'piano';
+    final preset = InstrumentPreset.fromIdOrNull(presetId);
+    final isSynthPreset = preset != null &&
+        (preset.category == InstrumentCategory.synth ||
+            preset.id.startsWith('syn_'));
     final track = Track(
       id: _uuid.v4(),
       name: name ?? 'Track ${state.tracks.length + 1}',
-      type: TrackType.instrument,
+      type: isSynthPreset ? TrackType.synth : TrackType.instrument,
       instrumentName: instrumentName ?? 'piano',
       volume: 0.8,
       color: trackColors[state.tracks.length % trackColors.length],
@@ -546,7 +554,19 @@ class ProjectNotifier extends Notifier<Project> {
     _markDirty();
     state = state.copyWith(
       tracks: state.tracks.map((t) {
-        if (t.id == trackId) return t.copyWith(instrumentName: instrumentName);
+        if (t.id == trackId) {
+          // Keep the track type in sync with the preset family.
+          final preset = InstrumentPreset.fromIdOrNull(instrumentName);
+          final isSynthPreset = preset != null &&
+              (preset.category == InstrumentCategory.synth ||
+                  preset.id.startsWith('syn_'));
+          return t.copyWith(
+            instrumentName: instrumentName,
+            type: t.type == TrackType.audio
+                ? t.type
+                : (isSynthPreset ? TrackType.synth : TrackType.instrument),
+          );
+        }
         return t;
       }).toList(),
     );

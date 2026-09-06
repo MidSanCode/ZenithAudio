@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-/// FL-style envelope curve: a list of control points joined by shaped
+/// Multi-point envelope curve: a list of control points joined by shaped
 /// segments. Each point carries a `curve` value (-1..1) that bends the
 /// segment leaving it: < 0 rises fast then flattens (concave), > 0 rises
 /// slowly then jumps (convex), 0 = linear.

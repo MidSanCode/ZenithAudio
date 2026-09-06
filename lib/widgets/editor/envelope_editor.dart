@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/envelope.dart';
 
-/// FL-style envelope editor: draggable control points on a 2D canvas.
+/// Envelope editor: draggable control points on a 2D canvas.
 /// Each point bends the segment that FOLLOWS it (curve wheel semantics).
 class EnvelopeEditor extends StatefulWidget {
   final EnvelopeCurve curve;

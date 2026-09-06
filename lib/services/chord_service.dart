@@ -1,6 +1,6 @@
 import '../models/note.dart';
 
-/// Chord / progression generation service (FL-style chord tool).
+/// Chord / progression generation service.
 class ChordService {
   ChordService._();
 

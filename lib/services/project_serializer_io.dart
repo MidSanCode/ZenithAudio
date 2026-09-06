@@ -154,8 +154,8 @@ class ProjectSerializer {
         'isMuted': t.isMuted,
         'isSolo': t.isSolo,
         if (t.type == TrackType.audio) 'audioFile': audioFile,
-        if (t.type == TrackType.instrument) 'instrumentName': t.instrumentName,
-        if (t.type == TrackType.instrument && t.notes.isNotEmpty)
+        if (t.isInstrument) 'instrumentName': t.instrumentName,
+        if (t.isInstrument && t.notes.isNotEmpty)
           'notes': t.notes.map((n) => n.toJson()).toList(),
         if (t.compressor != null) 'compressor': t.compressor!.toJson(),
         'color': '#${t.color.toARGB32().toRadixString(16).padLeft(8, '0')}',
@@ -199,7 +199,7 @@ class ProjectSerializer {
         name: t['name'] as String? ?? 'Track',
         type: type,
         instrumentName: t['instrumentName'] as String?,
-        notes: type == TrackType.instrument
+        notes: (type == TrackType.instrument || type == TrackType.synth)
             ? ((t['notes'] as List<dynamic>?)?.map((n) =>
                 Note.fromJson(n as Map<String, dynamic>)).toList() ?? [])
             : const [],

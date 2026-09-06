@@ -36,7 +36,6 @@ class TrackPanel extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          _ChannelRackHeader(),
           Expanded(
             child: project.tracks.isEmpty
                 ? Center(
@@ -80,7 +79,12 @@ class TrackPanel extends ConsumerWidget {
   }
 }
 
-class _ChannelRackHeader extends ConsumerWidget {
+/// Header strip for the channel rack. Rendered in the timeline-ruler band
+/// (left of the ruler) so the channel list below starts exactly where the
+/// track lanes start.
+class ChannelRackHeader extends ConsumerWidget {
+  const ChannelRackHeader({super.key});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final project = ref.watch(projectProvider);

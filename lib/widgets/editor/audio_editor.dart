@@ -17,12 +17,11 @@ import '../mixer/mixer_panel.dart';
 import '../browser/browser_panel.dart';
 import '../../providers/browser_provider.dart';
 import 'timeline_ruler.dart';
-import 'track_panel.dart';
+import 'track_panel.dart' show TrackPanel, ChannelRackHeader;
 import 'waveform_view.dart';
 import 'piano_roll_track.dart';
 import 'piano_roll_editor.dart';
 import 'audio_clip_editor.dart';
-import '../../models/track.dart';
 
 class AudioEditor extends ConsumerStatefulWidget {
   const AudioEditor({super.key});
@@ -274,12 +273,16 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                       children: [
                         Row(
                           children: [
-                            // Mirror the left panels below (Browser + Track
-                            // rack) so the ruler starts exactly where the
-                            // track lanes do.
+                            // Ruler band: mirrors the left panels' widths so
+                            // the ruler starts where the lanes do, and hosts
+                            // the CHANNELS header so both lists below start
+                            // at exactly the same y.
                             if (ref.watch(browserVisibilityProvider))
                               const SizedBox(width: AppConstants.browserPanelWidth),
-                            SizedBox(width: TrackPanel.widthFor(screenSize)),
+                            SizedBox(
+                              width: TrackPanel.widthFor(screenSize),
+                              child: ChannelRackHeader(),
+                            ),
                             Expanded(
                               child: ClipRect(
                                 child: SingleChildScrollView(
@@ -324,7 +327,7 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                                                   itemExtent: AppConstants.trackTileHeight,
                                                   itemBuilder: (context, index) {
                                                     final tr = project.tracks[index];
-                                                      if (tr.type == TrackType.instrument) {
+                                                      if (tr.isInstrument) {
                                                         return PianoRollTrack(
                                                           track: tr,
                                                           pixelsPerSecond: pps,

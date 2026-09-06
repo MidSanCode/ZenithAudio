@@ -85,7 +85,7 @@ class SynthEditorLauncher {
 }
 
 /// Editor body for a synth-engine instrument: engine selector, engine params,
-/// FL-style amplitude envelope, and live preview.
+/// multi-point amplitude envelope, and live preview.
 ///
 /// Embeddable: used both by [SynthEditorDialog] (modal) and directly inside a
 /// floating window ([FloatingWindow] passes [onClose] to wire the close).
@@ -274,7 +274,7 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
 
         Row(
           children: [
-            Text('包络 (FL 曲线)',
+            Text('包络曲线',
                 style:
                     TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
             const Spacer(),

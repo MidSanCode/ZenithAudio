@@ -221,7 +221,7 @@ class AudioService {
   Stream<double> prepareTracks(List<Track> tracks,
       {String? skipTrackId, bool useIsolate = false}) async* {
     final targets = tracks.where((t) =>
-        t.type == TrackType.instrument &&
+        t.isInstrument &&
         t.id != skipTrackId &&
         t.instrumentName != null &&
         t.notes.isNotEmpty);

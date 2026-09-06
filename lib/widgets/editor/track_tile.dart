@@ -31,6 +31,19 @@ class TrackTile extends ConsumerWidget {
     required this.index,
   });
 
+  /// True when the track plays a synth-family preset (shown with its own
+  /// type icon/label).
+  bool get _isSynthPresetTrack {
+    if (track.type == TrackType.synth) return true;
+    if (!track.isInstrument) return false;
+    final name = track.instrumentName;
+    if (name == null) return false;
+    final preset = InstrumentPreset.fromIdOrNull(name);
+    return preset != null &&
+        (preset.category == InstrumentCategory.synth ||
+            preset.id.startsWith('syn_'));
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasSolo = ref.watch(projectProvider).hasSoloTrack;
@@ -57,7 +70,7 @@ class TrackTile extends ConsumerWidget {
           children: [
             _ColorStrip(color: track.color),
             _ChannelLabel(index: index, cs: cs),
-            _TypeIcon(track: track, cs: cs),
+            _TypeIcon(track: track, cs: cs, isSynth: _isSynthPresetTrack),
             const SizedBox(width: 4),
             Expanded(
               child: _TrackName(
@@ -70,7 +83,7 @@ class TrackTile extends ConsumerWidget {
               _PanKnob(track: track, ref: ref),
             ],
             _ControlButtons(track: track, ref: ref),
-            if (track.type == TrackType.instrument && !isMobile)
+            if (track.isInstrument && !isMobile)
               Flexible(
                 child: ClipRect(
                   child: SingleChildScrollView(
@@ -93,7 +106,7 @@ class TrackTile extends ConsumerWidget {
   }
 
   void _openEditor(BuildContext context, WidgetRef ref) {
-    if (track.type == TrackType.instrument) {
+    if (track.isInstrument) {
       final settings = ref.read(settingsProvider);
       if (settings.editorMode == 'float') {
         ref.read(floatingWindowProvider.notifier).open(
@@ -129,7 +142,7 @@ class TrackTile extends ConsumerWidget {
       const PopupMenuItem(value: 'rename', child: Text('重命名')),
       const PopupMenuItem(value: 'properties', child: Text('属性')),
     ];
-    if (track.type == TrackType.instrument) {
+    if (track.isInstrument) {
       items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
       items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
       final synthPreset = track.instrumentName == null
@@ -249,8 +262,10 @@ class TrackTile extends ConsumerWidget {
           children: [
             Text('名称: ${track.name}'),
             const SizedBox(height: 8),
-            Text('类型: ${track.type == TrackType.instrument ? "乐器" : "音频"}'),
-            if (track.type == TrackType.instrument && track.instrumentName != null)
+            Text('类型: ${track.type == TrackType.audio
+                ? "音频"
+                : (_isSynthPresetTrack ? "合成器" : "乐器")}'),
+            if (track.isInstrument && track.instrumentName != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text('乐器: ${track.instrumentName}'),
@@ -504,16 +519,19 @@ class _ChannelLabel extends StatelessWidget {
 class _TypeIcon extends StatelessWidget {
   final Track track;
   final ColorScheme cs;
-  const _TypeIcon({required this.track, required this.cs});
+  final bool isSynth;
+  const _TypeIcon({required this.track, required this.cs, this.isSynth = false});
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: Icon(
-        track.type == TrackType.instrument
-            ? Icons.piano_rounded
-            : Icons.audiotrack_rounded,
+        track.type == TrackType.synth || (track.isInstrument && isSynth)
+            ? Icons.graphic_eq_rounded
+            : track.type == TrackType.instrument
+                ? Icons.piano_rounded
+                : Icons.audiotrack_rounded,
         size: 13,
         color: track.color.withAlpha(204),
       ),

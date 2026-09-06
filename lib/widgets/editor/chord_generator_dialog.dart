@@ -4,7 +4,7 @@ import '../../models/note.dart';
 import '../../models/project.dart';
 import '../../services/chord_service.dart';
 
-/// Auto-chord generator dialog (FL-style chord tool).
+/// Auto-chord generator dialog.
 ///
 /// Two modes:
 ///  1. Progression: pick key/mode/progression → insert chord track starting

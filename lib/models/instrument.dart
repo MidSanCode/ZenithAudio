@@ -33,7 +33,7 @@ class InstrumentPreset {
   // 'sample', 'granular').
   final String? synthEngine;
 
-  /// FL-style amplitude envelope (points + curves). When present it
+  /// Multi-point amplitude envelope (points + curves). When present it
   /// replaces the ADSR from attack/decay/sustain/release.
   final EnvelopeCurve? envCurve;
 

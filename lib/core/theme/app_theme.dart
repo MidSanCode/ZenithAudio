@@ -5,7 +5,7 @@ const Color _seed = Color(0xFF00AAFF);
 class AppTheme {
   AppTheme._();
 
-  // ── FL Studio-inspired Dark Theme ──────────────────────────
+  // ── Dark Theme ─────────────────────────────────────────────
   static ThemeData get darkTheme {
     final cs = ColorScheme.fromSeed(
       seedColor: _seed,

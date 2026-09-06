@@ -6,7 +6,7 @@ class AppConstants {
   static const String appName = '卓声';
   static const String appNameEn = 'ZENITH AUDIO';
 
-  // FL Studio-inspired compact layout constants
+  // Compact layout constants
   static const double trackPanelWidth = 280;
   static const double trackTileHeight = 52;
   static const double timelineHeight = 24;
@@ -21,7 +21,8 @@ class AppConstants {
   static const double tabletBreakpoint = 1024;
 
   static const String projectExtension = '.zap';
-  static const int projectFormatVersion = 1;
+  // v2: adds TrackType.synth (synth-family presets get their own track type).
+  static const int projectFormatVersion = 2;
   static const String projectAssetsDir = 'assets/';
   static const String projectInstrumentsDir = 'instruments/';
   static const String projectEffectsDir = 'effects/';
@@ -38,7 +39,7 @@ class AppConstants {
 class AppColors {
   AppColors._();
 
-  // FL Studio-inspired neon accent palette
+  // Neon accent palette
   static const Color accent = Color(0xFF00AAFF);
   static const Color accentDim = Color(0xFF0077BB);
   static const Color neonGreen = Color(0xFF00FF44);
@@ -70,7 +71,7 @@ class AppColors {
   static const Color muteStrip = Color(0xFF1E1E22);
   static const Color masterStrip = Color(0xFF1A1A1E);
 
-  // 16 FL Studio-style channel colors
+  // 16 channel colors
   static const List<Color> trackColors = [
     Color(0xFF40C4FF), // cyan
     Color(0xFF69F0AE), // green
