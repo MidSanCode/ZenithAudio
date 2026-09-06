@@ -155,7 +155,7 @@ class AudioService {
 
     const maxDur = 120.0;
     final dur = track.computedDuration > 0
-        ? (track.computedDuration + 0.5).clamp(0, maxDur)
+        ? (track.computedDuration + 0.5).clamp(0.0, maxDur).toDouble()
         : 2.0;
     final sampleRate = 44100;
 

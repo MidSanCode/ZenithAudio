@@ -260,10 +260,13 @@ class SynthVoice {
     if (engine == SynthEngine.wavetable) {
       _tables = _buildTables(inst);
     }
-    if (engine == SynthEngine.sample && bank != null) {
-      final preset = bank.findPreset(inst.programNumber);
-      if (preset != null && preset.samples.isNotEmpty) {
-        _sfPreset = preset;
+    if (engine == SynthEngine.sample) {
+      final b = bank;
+      if (b != null) {
+        final preset = b.findPreset(inst.programNumber);
+        if (preset != null && preset.samples.isNotEmpty) {
+          _sfPreset = preset;
+        }
       }
     }
   }
@@ -336,7 +339,7 @@ class SynthVoice {
       final double amp;
       if (useEnv) {
         final u = (t / noteDuration).clamp(0.0, 1.0);
-        var g = envCurve.evaluate(u);
+        var g = envCurve!.evaluate(u);
         if (t > noteDuration) {
           final rt = ((t - noteDuration) / releaseSec).clamp(0.0, 1.0);
           g *= 1.0 - rt;

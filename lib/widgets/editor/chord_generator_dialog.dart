@@ -15,7 +15,7 @@ class ChordGeneratorDialog extends StatefulWidget {
   final List<Note> existingNotes;
   final double insertSec;
   final double secPerBeat;
-  final int gridResolution; // beats per grid step (for snapping)
+  final double gridResolution; // beats per grid step (for snapping)
   final bool snapToGrid;
   final ValueChanged<List<Note>> onInsert;
 
@@ -35,8 +35,8 @@ class ChordGeneratorDialog extends StatefulWidget {
 }
 
 class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
-  late int _keyRoot = _defaultKeyRoot();
-  String _mode = _defaultMode();
+  int _keyRoot = 0;
+  String _mode = 'major';
   String _progression = 'pop';
   String _pattern = 'block';
   int _octave = 3;
@@ -44,16 +44,15 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
   int _repeat = 2;
   bool _replaceExisting = false;
 
-  int _defaultKeyRoot() {
+  @override
+  void initState() {
+    super.initState();
     final ks = widget.project.keySignature; // e.g. 'C', 'Am', 'F#'
-    final isMinor = ks.contains('m');
+    _mode = ks.contains('m') ? 'minor' : 'major';
     final root = ks.replaceAll('m', '').trim();
     final idx = ChordService.noteNames.indexOf(root.isEmpty ? 'C' : root);
-    return idx < 0 ? 0 : idx;
+    _keyRoot = idx < 0 ? 0 : idx;
   }
-
-  String _defaultMode() =>
-      widget.project.keySignature.contains('m') ? 'minor' : 'major';
 
   String get _modeLabel => _mode == 'major' ? '大调' : '小调';
 

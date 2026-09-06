@@ -428,6 +428,7 @@ class _InstrumentCard extends StatelessWidget {
   final bool isPreviewing;
   final VoidCallback onTap;
   final VoidCallback onPreview;
+  final VoidCallback? onEdit;
 
   const _InstrumentCard({
     required this.preset,
