@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math';
 import 'dart:typed_data';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/track.dart';
 import '../models/instrument.dart';
+import '../models/envelope.dart';
+import '../models/note.dart';
 import '../core/utils/logger.dart';
+import 'synth_engine.dart';
+import 'soundfont_service.dart';
+import 'soundfont_parser.dart' show SoundFontBank;
 
 final audioServiceProvider = Provider<AudioService>((ref) {
   final service = AudioService();
@@ -138,7 +142,12 @@ class AudioService {
     if (track.type == TrackType.audio) return track.audioFilePath;
     if (track.instrumentName == null || track.notes.isEmpty) return null;
 
-    final noteHash = Object.hash(track.instrumentName, Object.hashAll(track.notes));
+    final compKey = track.compressor == null
+        ? 'off'
+        : track.compressor!.toJson().entries
+            .map((e) => '${e.key}=${e.value}')
+            .join(',');
+    final noteHash = Object.hash(track.instrumentName, Object.hashAll(track.notes), compKey);
     final cached = _wavCache[track.id];
     if (cached != null && cached.noteHash == noteHash) {
       return cached.path;
@@ -152,30 +161,12 @@ class AudioService {
 
     final Uint8List wav;
     if (useIsolate) {
-      final params = <String, dynamic>{
-        'notes': track.notes.map((n) => {
-          'startTime': n.startTime,
-          'duration': n.duration,
-          'pitch': n.pitch,
-          'velocity': n.velocity,
-        }).toList(),
-        'instrumentName': track.instrumentName,
-        'duration': dur,
-        'sampleRate': sampleRate,
-      };
-      wav = await Isolate.run(() => _synthAndEncodeWav(params));
+      final params = _jobParams(track, dur, sampleRate);
+      final bank = SoundFontService.instance.bank;
+      wav = await Isolate.run(() => _synthAndEncodeWav(params, bank));
     } else {
-      wav = _synthAndEncodeWav(<String, dynamic>{
-        'notes': track.notes.map((n) => {
-          'startTime': n.startTime,
-          'duration': n.duration,
-          'pitch': n.pitch,
-          'velocity': n.velocity,
-        }).toList(),
-        'instrumentName': track.instrumentName,
-        'duration': dur,
-        'sampleRate': sampleRate,
-      });
+      wav = _synthAndEncodeWav(_jobParams(track, dur, sampleRate),
+          SoundFontService.instance.bank);
     }
 
     final dir = await getTemporaryDirectory();
@@ -185,6 +176,45 @@ class AudioService {
     _wavCache[track.id] = _WavCache(filePath, noteHash);
     return filePath;
   }
+
+  /// Serialize a track into the parameter map consumed by
+  /// [_synthAndEncodeWav] (isolate-safe: plain JSON types only).
+  Map<String, dynamic> _jobParams(Track track, double dur, int sampleRate) {
+    final inst = InstrumentPreset.fromId(track.instrumentName!);
+    return <String, dynamic>{
+      'notes': track.notes.map((n) => {
+        'startTime': n.startTime,
+        'duration': n.duration,
+        'pitch': n.pitch,
+        'velocity': n.velocity,
+      }).toList(),
+      'instrument': _presetToMap(inst),
+      'duration': dur,
+      'sampleRate': sampleRate,
+      'compressor': track.compressor?.enabled == true
+          ? track.compressor!.toJson()
+          : null,
+    };
+  }
+
+  /// Flatten an InstrumentPreset into a plain map so the isolate does not
+  /// depend on Flutter icon constants.
+  static Map<String, dynamic> _presetToMap(InstrumentPreset p) => <String, dynamic>{
+    'id': p.id,
+    'programNumber': p.programNumber,
+    'harmonics': p.harmonics,
+    'attack': p.attack, 'decay': p.decay, 'sustain': p.sustain,
+    'release': p.release, 'detuneCents': p.detuneCents,
+    'noiseAttack': p.noiseAttack, 'brightnessFactor': p.brightnessFactor,
+    'synthEngine': p.synthEngine,
+    'envCurve': p.envCurve?.toJson(),
+    'filterType': p.filterType, 'filterCutoff': p.filterCutoff,
+    'filterResonance': p.filterResonance, 'filterEnvAmount': p.filterEnvAmount,
+    'filterAttack': p.filterAttack, 'filterDecay': p.filterDecay,
+    'filterSustain': p.filterSustain,
+    'fmRatio': p.fmRatio, 'fmIndex': p.fmIndex, 'fmDecay': p.fmDecay,
+    'fmFeedback': p.fmFeedback, 'morphRate': p.morphRate,
+  };
 
   /// Prepare all given tracks (generate WAVs for instrument tracks if needed).
   /// Returns a stream of progress (0.0 – 1.0).
@@ -282,7 +312,12 @@ class AudioService {
     if (track.type == TrackType.audio) return track.audioFilePath != null;
     final cached = _wavCache[track.id];
     if (cached == null) return false;
-    final noteHash = Object.hash(track.instrumentName, Object.hashAll(track.notes));
+    final compKey = track.compressor == null
+        ? 'off'
+        : track.compressor!.toJson().entries
+            .map((e) => '${e.key}=${e.value}')
+            .join(',');
+    final noteHash = Object.hash(track.instrumentName, Object.hashAll(track.notes), compKey);
     return cached.noteHash == noteHash;
   }
 
@@ -412,48 +447,73 @@ Uint8List _encodeWav(Float64List buffer, int numSamples, int sampleRate) {
   return result.bytes;
 }
 
-/// Top-level synth + encode function for use with [compute].
-/// [params] must contain 'notes', 'instrumentName', 'duration', 'sampleRate'.
-Uint8List _synthAndEncodeWav(Map<String, dynamic> params) {
+/// Top-level synth + encode function for use with [Isolate.run].
+/// [params] comes from [_jobParams]: plain-JSON instrument map.
+/// [bank] is the (sendable) SoundFont bank, or null.
+Uint8List _synthAndEncodeWav(Map<String, dynamic> params,
+    [SoundFontBank? bank]) {
   final notesData = params['notes'] as List<dynamic>;
-  final instrumentName = params['instrumentName'] as String;
+  final instMap = params['instrument'] as Map<String, dynamic>;
   final duration = (params['duration'] as num).toDouble();
   final sampleRate = params['sampleRate'] as int;
+  final compJson = params['compressor'] as Map<String, dynamic>?;
 
-  final inst = InstrumentPreset.fromId(instrumentName);
-  final numSamples = (sampleRate * duration).ceil();
-  final buffer = Float64List(numSamples);
+  final inst = _presetFromMap(instMap);
+  final notes = notesData.map((nd) {
+    final m = nd as Map<String, dynamic>;
+    return Note(
+      startTime: (m['startTime'] as num).toDouble(),
+      duration: (m['duration'] as num).toDouble(),
+      pitch: m['pitch'] as int,
+      velocity: m['velocity'] as int,
+    );
+  }).toList();
 
-  for (final nd in notesData) {
-    final noteMap = nd as Map<String, dynamic>;
-    final startTime = (noteMap['startTime'] as num).toDouble();
-    final noteDuration = (noteMap['duration'] as num).toDouble();
-    final pitch = noteMap['pitch'] as int;
-    final velocity = noteMap['velocity'] as int;
+  final buffer = renderNoteList(SynthRenderJob(
+    notes: notes,
+    instrument: inst,
+    totalDuration: duration,
+    sampleRate: sampleRate,
+    bank: SoundFontService.instance.bank,
+    compressor: compJson != null
+        ? TrackCompressorParams.fromJson(compJson)
+        : null,
+  ));
 
-    final startSample = (startTime * sampleRate).round();
-    final durSamples = (noteDuration * sampleRate).round();
-    final endSample = (startSample + durSamples).clamp(0, numSamples);
-    final freq = 440 * pow(2, (pitch - 69) / 12).toDouble();
-    for (int i = startSample; i < endSample; i++) {
-      final t = (i - startSample) / sampleRate;
-      final env = inst.getEnvelope(t, noteDuration, velocity);
-      buffer[i] += inst.synthSample(t, freq, velocity) * env;
-    }
-  }
-
-  double maxAmp = 0;
-  for (final s in buffer) {
-    final a = s.abs();
-    if (a > maxAmp) maxAmp = a;
-  }
-  if (maxAmp > 0 && maxAmp > 0.95) {
-    final scale = 0.95 / maxAmp;
-    for (int i = 0; i < buffer.length; i++) buffer[i] *= scale;
-  }
-
-  return _encodeWav(buffer, numSamples, sampleRate);
+  return _encodeWav(buffer, buffer.length, sampleRate);
 }
+
+/// Rebuild an InstrumentPreset from the flattened map (no icon dependency).
+InstrumentPreset _presetFromMap(Map<String, dynamic> m) => InstrumentPreset(
+  id: m['id'] as String? ?? 'track',
+  name: m['id'] as String? ?? 'track',
+  programNumber: m['programNumber'] as int? ?? 0,
+  harmonics: ((m['harmonics'] as List?) ?? const [1.0])
+      .map((e) => (e as num).toDouble()).toList(),
+  attack: (m['attack'] as num?)?.toDouble() ?? 0.01,
+  decay: (m['decay'] as num?)?.toDouble() ?? 0.2,
+  sustain: (m['sustain'] as num?)?.toDouble() ?? 0.7,
+  release: (m['release'] as num?)?.toDouble() ?? 0.1,
+  detuneCents: (m['detuneCents'] as num?)?.toDouble() ?? 0,
+  noiseAttack: (m['noiseAttack'] as num?)?.toDouble() ?? 0,
+  brightnessFactor: (m['brightnessFactor'] as num?)?.toDouble() ?? 0.3,
+  synthEngine: m['synthEngine'] as String?,
+  envCurve: m['envCurve'] != null
+      ? EnvelopeCurve.fromJson(m['envCurve'] as Map<String, dynamic>)
+      : null,
+  filterType: m['filterType'] as String? ?? 'lowPass',
+  filterCutoff: (m['filterCutoff'] as num?)?.toDouble() ?? 1200,
+  filterResonance: (m['filterResonance'] as num?)?.toDouble() ?? 1.2,
+  filterEnvAmount: (m['filterEnvAmount'] as num?)?.toDouble() ?? 2.0,
+  filterAttack: (m['filterAttack'] as num?)?.toDouble() ?? 0.005,
+  filterDecay: (m['filterDecay'] as num?)?.toDouble() ?? 0.3,
+  filterSustain: (m['filterSustain'] as num?)?.toDouble() ?? 0.3,
+  fmRatio: (m['fmRatio'] as num?)?.toDouble() ?? 2.0,
+  fmIndex: (m['fmIndex'] as num?)?.toDouble() ?? 3.0,
+  fmDecay: (m['fmDecay'] as num?)?.toDouble() ?? 0.8,
+  fmFeedback: (m['fmFeedback'] as num?)?.toDouble() ?? 0.15,
+  morphRate: (m['morphRate'] as num?)?.toDouble() ?? 0,
+);
 
 class _DataWriter {
   final List<int> _data;

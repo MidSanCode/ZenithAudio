@@ -14,6 +14,7 @@ import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
 import '../services/audio_service.dart';
 import '../services/project_serializer.dart';
+import '../services/synth_engine.dart' show TrackCompressorParams;
 import 'settings_provider.dart';
 
 final projectProvider = NotifierProvider<ProjectNotifier, Project>(
@@ -546,6 +547,18 @@ class ProjectNotifier extends Notifier<Project> {
     state = state.copyWith(
       tracks: state.tracks.map((t) {
         if (t.id == trackId) return t.copyWith(instrumentName: instrumentName);
+        return t;
+      }).toList(),
+    );
+  }
+
+  /// null removes the compressor; a params instance sets/replaces it.
+  void setTrackCompressor(String trackId, TrackCompressorParams? params) {
+    _pushUndo();
+    _markDirty();
+    state = state.copyWith(
+      tracks: state.tracks.map((t) {
+        if (t.id == trackId) return t.copyWith(compressor: params);
         return t;
       }).toList(),
     );

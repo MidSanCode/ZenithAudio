@@ -1,9 +1,10 @@
 import 'dart:html' as html;
-import 'dart:math';
 import 'dart:typed_data';
 import '../models/note.dart';
 import '../models/instrument.dart';
 import '../core/utils/logger.dart';
+import 'synth_engine.dart';
+import 'soundfont_service.dart';
 
 class SynthService {
   static const _sampleRate = 44100;
@@ -19,13 +20,16 @@ class SynthService {
 
     final instrument = InstrumentPreset.fromId(instrumentName);
     final totalDuration = _computeDuration(notes);
-    final numSamples = (_sampleRate * totalDuration).ceil();
 
-    final buffer = Float64List(numSamples);
-    _renderNotes(notes, instrument, buffer, numSamples);
-    _normalize(buffer);
+    final buffer = renderNoteList(SynthRenderJob(
+      notes: notes,
+      instrument: instrument,
+      totalDuration: totalDuration,
+      sampleRate: _sampleRate,
+      bank: SoundFontService.instance.bank,
+    ));
 
-    final wavBytes = _encodeWav(buffer, numSamples);
+    final wavBytes = _encodeWav(buffer, buffer.length);
     final blob = html.Blob([wavBytes], 'audio/wav');
     final url = html.Url.createObjectUrl(blob);
 
@@ -42,38 +46,25 @@ class SynthService {
     return end + 0.5;
   }
 
-  void _renderNotes(List<Note> notes, InstrumentPreset inst, Float64List buffer, int numSamples) {
-    for (final note in notes) {
-      final startSample = (note.startTime * _sampleRate).round();
-      final durSamples = (note.duration * _sampleRate).round();
-      if (startSample >= numSamples) break;
-
-      final endSample = (startSample + durSamples).clamp(0, numSamples);
-      final freq = _midiToFreq(note.pitch);
-
-      for (int i = startSample; i < endSample; i++) {
-        final t = (i - startSample) / _sampleRate;
-        final envelope = inst.getEnvelope(t, note.duration, note.velocity);
-        final sample = inst.synthSample(t, freq, note.velocity) * envelope;
-        buffer[i] += sample;
-      }
-    }
+  Float64List renderPreview(InstrumentPreset inst,
+      {int pitch = 60, double duration = 1.0, int velocity = 100}) {
+    final tail = inst.envCurve != null ? 0.5 : 0.3;
+    final job = SynthRenderJob(
+      notes: [
+        Note(pitch: pitch, startTime: 0, duration: duration, velocity: velocity),
+      ],
+      instrument: inst,
+      totalDuration: duration + tail,
+      sampleRate: _sampleRate,
+      bank: SoundFontService.instance.bank,
+    );
+    return renderNoteList(job);
   }
 
-  double _midiToFreq(int pitch) => 440 * pow(2, (pitch - 69) / 12).toDouble();
-
-  void _normalize(Float64List buffer) {
-    double maxAmp = 0;
-    for (final s in buffer) {
-      final abs = s.abs();
-      if (abs > maxAmp) maxAmp = abs;
-    }
-    if (maxAmp > 0 && maxAmp > 0.95) {
-      final scale = 0.95 / maxAmp;
-      for (int i = 0; i < buffer.length; i++) {
-        buffer[i] *= scale;
-      }
-    }
+  Uint8List renderPreviewWav(InstrumentPreset inst,
+      {int pitch = 60, double duration = 1.0, int velocity = 100}) {
+    final buffer = renderPreview(inst, pitch: pitch, duration: duration, velocity: velocity);
+    return _encodeWav(buffer, buffer.length);
   }
 
   Uint8List _encodeWav(Float64List buffer, int numSamples) {
@@ -103,27 +94,6 @@ class SynthService {
     }
 
     return result.bytes;
-  }
-
-  Float64List renderPreview(InstrumentPreset inst, {int pitch = 60, double duration = 1.0, int velocity = 100}) {
-    final numSamples = (_sampleRate * duration).ceil();
-    final buffer = Float64List(numSamples);
-    final freq = _midiToFreq(pitch);
-
-    for (int i = 0; i < numSamples; i++) {
-      final t = i / _sampleRate;
-      final envelope = inst.getEnvelope(t, duration, velocity);
-      final sample = inst.synthSample(t, freq, velocity) * envelope;
-      buffer[i] = sample;
-    }
-
-    _normalize(buffer);
-    return buffer;
-  }
-
-  Uint8List renderPreviewWav(InstrumentPreset inst, {int pitch = 60, double duration = 1.0, int velocity = 100}) {
-    final buffer = renderPreview(inst, pitch: pitch, duration: duration, velocity: velocity);
-    return _encodeWav(buffer, buffer.length);
   }
 }
 

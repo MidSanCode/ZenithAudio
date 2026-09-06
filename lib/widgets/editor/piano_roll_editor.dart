@@ -16,6 +16,7 @@ import '../../providers/playback_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/synth_service.dart';
 import '../../services/audio_service.dart';
+import '../../widgets/editor/chord_generator_dialog.dart';
 import '../../core/constants/app_constants.dart';
 
 enum ViewportMode { edit, select, scroll }
@@ -213,6 +214,12 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
           Text(track.name, style: const TextStyle(fontSize: 13)),
           const Spacer(),
           _ToolChip(
+            icon: Icons.library_music,
+            label: '和弦',
+            onTap: _openChordGenerator,
+          ),
+          const SizedBox(width: 4),
+          _ToolChip(
             icon: settings.snapToGrid ? Icons.grid_on : Icons.grid_off,
             label: settings.snapToGrid ? 'Snap ON' : 'Snap OFF',
             onTap: () => ref.read(settingsProvider.notifier).setSnapToGrid(!settings.snapToGrid),
@@ -259,6 +266,48 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
     final next = cur >= 1 ? 0.5 : cur >= 0.5 ? 0.25 : cur >= 0.25 ? 0.125 : 1.0;
     ref.read(settingsProvider.notifier).setGridResolution(next);
   }
+
+  void _openChordGenerator() {
+    final project = ref.read(projectProvider);
+    final settings = ref.read(settingsProvider);
+    final track = _track;
+    final playhead = ref.read(playheadPositionProvider);
+    final insertSec =
+        playhead > 0.01 ? playhead : _firstNoteStartOrZero(track.notes);
+    showDialog<bool>(
+      context: context,
+      builder: (_) => ChordGeneratorDialog(
+        project: project,
+        existingNotes: track.notes,
+        insertSec: insertSec,
+        secPerBeat: project.secondsPerBeat,
+        gridResolution: settings.gridResolution,
+        snapToGrid: settings.snapToGrid,
+        onInsert: (newNotes) {
+          _lastGeneratedChordNotes = newNotes;
+        },
+      ),
+    ).then((replaceExisting) {
+      if (replaceExisting == null) return; // cancelled
+      // Dialog already produced the notes; regenerate them deterministically
+      // is wasteful, so the dialog passes them through onInsert; here we
+      // simply rely on the last generated set captured below.
+      final generated = _lastGeneratedChordNotes;
+      if (generated == null || generated.isEmpty) return;
+      final merged =
+          replaceExisting ? generated : [...track.notes, ...generated];
+      ref
+          .read(projectProvider.notifier)
+          .updateTrackNotes(widget.trackId, merged);
+      _lastGeneratedChordNotes = null;
+    });
+  }
+
+  List<Note>? _lastGeneratedChordNotes;
+
+  double _firstNoteStartOrZero(List<Note> notes) => notes.isEmpty
+      ? 0.0
+      : notes.map((n) => n.startTime).reduce((a, b) => a < b ? a : b);
 
   Widget _buildTransportBar(
       ColorScheme cs, PlaybackState state, double playhead, Project project, double wavProgress) {

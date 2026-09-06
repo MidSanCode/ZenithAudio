@@ -8,7 +8,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/instrument.dart';
 import '../services/synth_service.dart';
+import '../services/soundfont_service.dart';
 import '../services/instrument_pack_service.dart';
+import '../widgets/editor/synth_editor_dialog.dart';
 
 /// Full-screen instrument picker with card grid and preview/audition.
 class InstrumentPickerPage extends StatefulWidget {
@@ -41,7 +43,50 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
       final gm = await InstrumentPackService.loadFromAsset('assets/instruments/gm_presets.json');
       InstrumentPreset.addUserPresets(gm);
     } catch (_) {}
+    await InstrumentPreset.loadPersisted();
     if (mounted) setState(() => _gmLoaded = true);
+  }
+
+  Future<void> _loadSoundFont() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['sf2'],
+      withData: kIsWeb,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    try {
+      Uint8List? bytes;
+      final label = result.files.first.name;
+      if (kIsWeb) {
+        bytes = result.files.first.bytes;
+      } else {
+        final path = result.files.first.path;
+        if (path != null) bytes = await File(path).readAsBytes();
+      }
+      if (bytes == null) throw Exception('无法读取文件内容');
+
+      SoundFontService.instance.loadBytes(bytes, label: label);
+      InstrumentPreset.registerSoundFontPresets(SoundFontService.instance.presets
+          .map((p) => (program: p.program, bank: p.bank, name: p.name))
+          .toList());
+      _previewCache.clear();
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已加载 SoundFont「${SoundFontService.instance.sourceLabel}」'
+                '(${SoundFontService.instance.presets.length} 个音色)'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('SoundFont 加载失败: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _importFromZip() async {
@@ -193,6 +238,25 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
     if (mounted) setState(() => _previewingId = null);
   }
 
+  bool _isEditable(InstrumentPreset p) =>
+      p.id.startsWith('syn_') || p.id.startsWith('custom_');
+
+  Future<void> _openSynthEditor(InstrumentPreset preset) async {
+    await SynthEditorDialog.show(context, preset, (edited) async {
+      // Built-ins become a new saved copy; customs overwrite in place.
+      final InstrumentPreset toSave;
+      if (edited.id.startsWith('syn_')) {
+        final copyId = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+        toSave = edited.copyWith(id: copyId);
+      } else {
+        toSave = edited;
+      }
+      await InstrumentPreset.saveUserCustom(toSave);
+      _previewCache.clear();
+      if (mounted) setState(() => _selectedId = toSave.id);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -235,6 +299,11 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
         title: const Text('Select Instrument'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.library_music, size: 20),
+            tooltip: '加载 .sf2 音色库',
+            onPressed: _loadSoundFont,
+          ),
+          IconButton(
             icon: const Icon(Icons.folder_open, size: 20),
             tooltip: 'Import SoundFont / Instrument Pack (ZIP)',
             onPressed: _importFromZip,
@@ -268,6 +337,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
               isPreviewing: _previewingId == inst.id,
               onTap: () => setState(() => _selectedId = inst.id),
               onPreview: () => _preview(inst.id),
+              onEdit: _isEditable(inst) ? () => _openSynthEditor(inst) : null,
             )),
           ],
           // User-imported instruments section
@@ -297,9 +367,45 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
                 isPreviewing: _previewingId == inst.id,
                 onTap: () => setState(() => _selectedId = inst.id),
                 onPreview: () => _preview(inst.id),
+                onEdit: _isEditable(inst) ? () => _openSynthEditor(inst) : null,
               )),
             ],
           ],
+          // SoundFont status banner
+          if (SoundFontService.instance.isLoaded)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer.withAlpha(80),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: cs.primary.withAlpha(120)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.library_music, size: 16, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'SoundFont 已加载: ${SoundFontService.instance.sourceLabel}'
+                        ' — ${SoundFontService.instance.presets.length} 个采样音色(SYNTHS 分组下)',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        SoundFontService.instance.unload();
+                        InstrumentPreset.clearSoundFontPresets();
+                        _previewCache.clear();
+                        setState(() {});
+                      },
+                      child: const Text('卸载', style: TextStyle(fontSize: 11)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -329,6 +435,7 @@ class _InstrumentCard extends StatelessWidget {
     required this.isPreviewing,
     required this.onTap,
     required this.onPreview,
+    this.onEdit,
   });
 
   @override
@@ -404,6 +511,12 @@ class _InstrumentCard extends StatelessWidget {
                 onPressed: onPreview,
                 tooltip: 'Preview',
               ),
+              if (onEdit != null)
+                IconButton(
+                  icon: const Icon(Icons.tune, size: 20),
+                  onPressed: onEdit,
+                  tooltip: '合成器编辑',
+                ),
             ],
           ),
         ),

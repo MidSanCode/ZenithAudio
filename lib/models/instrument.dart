@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'envelope.dart';
 
 enum InstrumentCategory { keyboard, string, wind, synth, percussion }
 
@@ -11,6 +14,9 @@ class InstrumentPreset {
   final InstrumentCategory category;
   final int programNumber;
 
+  // Shared per-preset noise generator (avoids allocating Random per sample).
+  static final Random _noiseGen = Random(7);
+
   // ── Synthesis parameters ──
   final List<double> harmonics;      // amplitude for harmonics 1-16
   final double attack;               // seconds
@@ -20,6 +26,34 @@ class InstrumentPreset {
   final double detuneCents;          // dual-oscillator detune (0 = none)
   final double noiseAttack;          // noise burst amplitude (0 = none)
   final double brightnessFactor;     // velocity brightness scaling
+
+  // ── Synth engine extension ──
+  // null / 'additive' keeps the legacy harmonic engine. Other values select
+  // the corresponding SynthEngine ('subtractive', 'wavetable', 'fm',
+  // 'sample', 'granular').
+  final String? synthEngine;
+
+  /// FL-style amplitude envelope (points + curves). When present it
+  /// replaces the ADSR from attack/decay/sustain/release.
+  final EnvelopeCurve? envCurve;
+
+  // Subtractive filter.
+  final String filterType;       // lowPass | highPass | bandPass | notch
+  final double filterCutoff;     // Hz
+  final double filterResonance;  // SVF q
+  final double filterEnvAmount;  // cutoff multiplier at env peak
+  final double filterAttack;     // seconds
+  final double filterDecay;      // seconds
+  final double filterSustain;    // 0..1
+
+  // FM (2-op).
+  final double fmRatio;    // modulator ratio (cycles of carrier)
+  final double fmIndex;    // modulation index
+  final double fmDecay;    // index decay seconds
+  final double fmFeedback; // 0..1 extra sustain index fraction
+
+  // Wavetable morph.
+  final double morphRate;  // seconds per morph cycle (0 = static frame 0)
 
   const InstrumentPreset({
     required this.id,
@@ -36,6 +70,20 @@ class InstrumentPreset {
     this.detuneCents = 0,
     this.noiseAttack = 0,
     this.brightnessFactor = 0.3,
+    this.synthEngine,
+    this.envCurve,
+    this.filterType = 'lowPass',
+    this.filterCutoff = 1200,
+    this.filterResonance = 1.2,
+    this.filterEnvAmount = 2.0,
+    this.filterAttack = 0.005,
+    this.filterDecay = 0.3,
+    this.filterSustain = 0.3,
+    this.fmRatio = 2.0,
+    this.fmIndex = 3.0,
+    this.fmDecay = 0.8,
+    this.fmFeedback = 0.15,
+    this.morphRate = 0,
   });
 
   static final List<InstrumentPreset> _userPresets = [];
@@ -54,7 +102,8 @@ class InstrumentPreset {
 
   static List<InstrumentPreset> get userPresets => List.unmodifiable(_userPresets);
 
-  static List<InstrumentPreset> get allPresets => [...presets, ..._userPresets];
+  static List<InstrumentPreset> get allPresets =>
+      [...presets, ...synthPresets, ..._userPresets, ..._soundFontPresets, ..._customPresets];
 
   static InstrumentPreset? fromIdOrNull(String id) {
     try {
@@ -328,8 +377,8 @@ class InstrumentPreset {
 
     // Noise attack transient
     if (noiseAttack > 0) {
-      final noise = (Random().nextDouble() * 2 - 1) * noiseAttack * exp(-t * 80);
-      s += noise;
+      final noise = _noiseGen.nextDouble() * 2 - 1;
+      s += noise * noiseAttack * exp(-t * 80);
     }
 
     return s * 0.6; // master level
@@ -346,4 +395,304 @@ class InstrumentPreset {
     if (t < rStart) return sustain * vel;
     return (sustain * vel) * max(0.0, 1.0 - (t - rStart) / release);
   }
+
+  // ── SoundFont virtual preset registry ──
+  static final List<InstrumentPreset> _soundFontPresets = [];
+
+  /// Register virtual presets for a loaded SoundFont bank.
+  static void registerSoundFontPresets(
+      List<({int program, int bank, String name})> presets) {
+    clearSoundFontPresets();
+    for (final p in presets) {
+      _soundFontPresets.add(InstrumentPreset(
+        id: 'sf2_${p.bank}_${p.program}',
+        name: p.name,
+        description: 'SoundFont bank ${p.bank} program ${p.program}',
+        icon: Icons.library_music_outlined,
+        category: InstrumentCategory.synth,
+        programNumber: p.program,
+        harmonics: const [1.0],
+        synthEngine: 'sample',
+        attack: 0.002,
+        decay: 0.3,
+        sustain: 0.8,
+        release: 0.3,
+      ));
+    }
+  }
+
+  static void clearSoundFontPresets() => _soundFontPresets.clear();
+
+  static List<InstrumentPreset> get soundFontPresets =>
+      List.unmodifiable(_soundFontPresets);
+
+  // ── Built-in synth-engine presets ──
+  static final List<InstrumentPreset> synthPresets = [
+    InstrumentPreset(
+      id: 'syn_sub_bass',
+      name: 'Sub Bass',
+      description: 'Subtractive: filtered saw bass',
+      icon: Icons.graphic_eq,
+      category: InstrumentCategory.synth,
+      programNumber: 38,
+      harmonics: [1.0],
+      synthEngine: 'subtractive',
+      attack: 0.004, decay: 0.35, sustain: 0.5, release: 0.12,
+      detuneCents: 8, noiseAttack: 0.04,
+      filterCutoff: 300, filterResonance: 1.6, filterEnvAmount: 4.0,
+      filterAttack: 0.004, filterDecay: 0.35, filterSustain: 0.35,
+    ),
+    InstrumentPreset(
+      id: 'syn_acid',
+      name: 'Acid Lead',
+      description: 'Subtractive: resonant acid lead',
+      icon: Icons.electric_bolt,
+      category: InstrumentCategory.synth,
+      programNumber: 81,
+      harmonics: [1.0],
+      synthEngine: 'subtractive',
+      attack: 0.002, decay: 0.3, sustain: 0.55, release: 0.08,
+      detuneCents: 6,
+      filterCutoff: 420, filterResonance: 6.0, filterEnvAmount: 6.0,
+      filterAttack: 0.002, filterDecay: 0.28, filterSustain: 0.12,
+    ),
+    InstrumentPreset(
+      id: 'syn_brass_stab',
+      name: 'Brass Stab',
+      description: 'Subtractive: punchy filtered stab',
+      icon: Icons.flash_on,
+      category: InstrumentCategory.synth,
+      programNumber: 62,
+      harmonics: [1.0],
+      synthEngine: 'subtractive',
+      attack: 0.02, decay: 0.22, sustain: 0.5, release: 0.18,
+      detuneCents: 12, noiseAttack: 0.06,
+      filterCutoff: 700, filterResonance: 2.0, filterEnvAmount: 3.2,
+      filterAttack: 0.02, filterDecay: 0.25, filterSustain: 0.4,
+    ),
+    InstrumentPreset(
+      id: 'syn_supersaw',
+      name: 'Super Saw',
+      description: 'Wavetable: wide detuned saw stack',
+      icon: Icons.waves,
+      category: InstrumentCategory.synth,
+      programNumber: 82,
+      harmonics: [1.0],
+      synthEngine: 'wavetable',
+      attack: 0.01, decay: 0.3, sustain: 0.8, release: 0.4,
+      detuneCents: 22,
+    ),
+    InstrumentPreset(
+      id: 'syn_morph_pad',
+      name: 'Morph Wave',
+      description: 'Wavetable: slow morphing pad',
+      icon: Icons.auto_awesome,
+      category: InstrumentCategory.synth,
+      programNumber: 89,
+      harmonics: [1.0],
+      synthEngine: 'wavetable',
+      attack: 0.35, decay: 0.4, sustain: 0.9, release: 0.9,
+      detuneCents: 14,
+      morphRate: 3.0,
+      envCurve: EnvelopeCurve(points: [
+        EnvelopePoint(x: 0, y: 0, curve: 0.5),
+        EnvelopePoint(x: 0.25, y: 1, curve: -0.3),
+        EnvelopePoint(x: 0.8, y: 0.8),
+        EnvelopePoint(x: 1, y: 0, curve: 0.3),
+      ]),
+    ),
+    InstrumentPreset(
+      id: 'syn_fm_bell',
+      name: 'FM Bell',
+      description: 'FM 2-op: metallic bell',
+      icon: Icons.notifications_active_outlined,
+      category: InstrumentCategory.synth,
+      programNumber: 9,
+      harmonics: [1.0],
+      synthEngine: 'fm',
+      attack: 0.001, decay: 1.6, sustain: 0.0, release: 1.2,
+      fmRatio: 3.01, fmIndex: 5.5, fmDecay: 1.1, fmFeedback: 0.2,
+    ),
+    InstrumentPreset(
+      id: 'syn_fm_ep',
+      name: 'FM E.Piano',
+      description: 'FM 2-op: electric piano',
+      icon: Icons.piano,
+      category: InstrumentCategory.keyboard,
+      programNumber: 4,
+      harmonics: [1.0],
+      synthEngine: 'fm',
+      attack: 0.002, decay: 1.0, sustain: 0.35, release: 0.4,
+      fmRatio: 1.0, fmIndex: 2.4, fmDecay: 0.55, fmFeedback: 0.12,
+    ),
+    InstrumentPreset(
+      id: 'syn_grain_pad',
+      name: 'Granular Cloud',
+      description: 'Granular: shimmering particle pad',
+      icon: Icons.blur_on,
+      category: InstrumentCategory.synth,
+      programNumber: 98,
+      harmonics: [1.0],
+      synthEngine: 'granular',
+      attack: 0.3, decay: 0.5, sustain: 0.85, release: 1.0,
+      detuneCents: 10,
+    ),
+  ];
+
+  // ── User custom presets (persisted via SharedPreferences) ──
+  static final List<InstrumentPreset> _customPresets = [];
+  static bool _persistLoaded = false;
+
+  static List<InstrumentPreset> get customPresets =>
+      List.unmodifiable(_customPresets);
+
+  static Future<void> loadPersisted() async {
+    if (_persistLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getStringList('zenith_user_instruments') ?? const [];
+      _customPresets
+        ..clear()
+        ..addAll(raw
+            .map((s) => _presetFromJson(s))
+            .whereType<InstrumentPreset>());
+      _persistLoaded = true;
+    } catch (_) {
+      // Non-fatal: persistence is best-effort.
+    }
+  }
+
+  static Future<void> saveUserCustom(InstrumentPreset preset) async {
+    final idx = _customPresets.indexWhere((e) => e.id == preset.id);
+    if (idx >= 0) {
+      _customPresets[idx] = preset;
+    } else {
+      _customPresets.add(preset);
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('zenith_user_instruments',
+          _customPresets.map(_presetToJson).toList());
+    } catch (_) {}
+  }
+
+  static Future<void> deleteUserCustom(String id) async {
+    _customPresets.removeWhere((e) => e.id == id);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('zenith_user_instruments',
+          _customPresets.map(_presetToJson).toList());
+    } catch (_) {}
+  }
+
+  static String _presetToJson(InstrumentPreset p) {
+    final m = <String, dynamic>{
+      'id': p.id, 'name': p.name, 'description': p.description,
+      'category': p.category.name, 'programNumber': p.programNumber,
+      'harmonics': p.harmonics,
+      'attack': p.attack, 'decay': p.decay, 'sustain': p.sustain,
+      'release': p.release, 'detuneCents': p.detuneCents,
+      'noiseAttack': p.noiseAttack, 'brightnessFactor': p.brightnessFactor,
+      if (p.synthEngine != null) 'synthEngine': p.synthEngine,
+      if (p.envCurve != null) 'envCurve': p.envCurve!.toJson(),
+      'filterType': p.filterType,
+      'filterCutoff': p.filterCutoff, 'filterResonance': p.filterResonance,
+      'filterEnvAmount': p.filterEnvAmount,
+      'filterAttack': p.filterAttack, 'filterDecay': p.filterDecay,
+      'filterSustain': p.filterSustain,
+      'fmRatio': p.fmRatio, 'fmIndex': p.fmIndex, 'fmDecay': p.fmDecay,
+      'fmFeedback': p.fmFeedback, 'morphRate': p.morphRate,
+    };
+    return jsonEncode(m);
+  }
+
+  static InstrumentPreset? _presetFromJson(String s) {
+    try {
+      final m = jsonDecode(s) as Map<String, dynamic>;
+      return InstrumentPreset(
+        id: m['id'] as String,
+        name: m['name'] as String? ?? 'Custom',
+        description: m['description'] as String? ?? '',
+        category: InstrumentCategory.values.firstWhere(
+            (c) => c.name == m['category'],
+            orElse: () => InstrumentCategory.synth),
+        programNumber: m['programNumber'] as int? ?? 80,
+        harmonics: ((m['harmonics'] as List?) ?? const [1.0])
+            .map((e) => (e as num).toDouble()).toList(),
+        attack: (m['attack'] as num?)?.toDouble() ?? 0.01,
+        decay: (m['decay'] as num?)?.toDouble() ?? 0.2,
+        sustain: (m['sustain'] as num?)?.toDouble() ?? 0.7,
+        release: (m['release'] as num?)?.toDouble() ?? 0.1,
+        detuneCents: (m['detuneCents'] as num?)?.toDouble() ?? 0,
+        noiseAttack: (m['noiseAttack'] as num?)?.toDouble() ?? 0,
+        brightnessFactor: (m['brightnessFactor'] as num?)?.toDouble() ?? 0.3,
+        synthEngine: m['synthEngine'] as String?,
+        envCurve: m['envCurve'] != null
+            ? EnvelopeCurve.fromJson(m['envCurve'] as Map<String, dynamic>)
+            : null,
+        filterType: m['filterType'] as String? ?? 'lowPass',
+        filterCutoff: (m['filterCutoff'] as num?)?.toDouble() ?? 1200,
+        filterResonance: (m['filterResonance'] as num?)?.toDouble() ?? 1.2,
+        filterEnvAmount: (m['filterEnvAmount'] as num?)?.toDouble() ?? 2.0,
+        filterAttack: (m['filterAttack'] as num?)?.toDouble() ?? 0.005,
+        filterDecay: (m['filterDecay'] as num?)?.toDouble() ?? 0.3,
+        filterSustain: (m['filterSustain'] as num?)?.toDouble() ?? 0.3,
+        fmRatio: (m['fmRatio'] as num?)?.toDouble() ?? 2.0,
+        fmIndex: (m['fmIndex'] as num?)?.toDouble() ?? 3.0,
+        fmDecay: (m['fmDecay'] as num?)?.toDouble() ?? 0.8,
+        fmFeedback: (m['fmFeedback'] as num?)?.toDouble() ?? 0.15,
+        morphRate: (m['morphRate'] as num?)?.toDouble() ?? 0,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  InstrumentPreset copyWith({
+    String? id,
+    String? name,
+    String? description,
+    InstrumentCategory? category,
+    int? programNumber,
+    List<double>? harmonics,
+    double? attack, double? decay, double? sustain, double? release,
+    double? detuneCents, double? noiseAttack, double? brightnessFactor,
+    String? synthEngine, EnvelopeCurve? envCurve,
+    String? filterType, double? filterCutoff, double? filterResonance,
+    double? filterEnvAmount, double? filterAttack, double? filterDecay,
+    double? filterSustain,
+    double? fmRatio, double? fmIndex, double? fmDecay, double? fmFeedback,
+    double? morphRate,
+  }) =>
+      InstrumentPreset(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        description: description ?? this.description,
+        icon: icon,
+        category: category ?? this.category,
+        programNumber: programNumber ?? this.programNumber,
+        harmonics: harmonics ?? this.harmonics,
+        attack: attack ?? this.attack,
+        decay: decay ?? this.decay,
+        sustain: sustain ?? this.sustain,
+        release: release ?? this.release,
+        detuneCents: detuneCents ?? this.detuneCents,
+        noiseAttack: noiseAttack ?? this.noiseAttack,
+        brightnessFactor: brightnessFactor ?? this.brightnessFactor,
+        synthEngine: synthEngine ?? this.synthEngine,
+        envCurve: envCurve ?? this.envCurve,
+        filterType: filterType ?? this.filterType,
+        filterCutoff: filterCutoff ?? this.filterCutoff,
+        filterResonance: filterResonance ?? this.filterResonance,
+        filterEnvAmount: filterEnvAmount ?? this.filterEnvAmount,
+        filterAttack: filterAttack ?? this.filterAttack,
+        filterDecay: filterDecay ?? this.filterDecay,
+        filterSustain: filterSustain ?? this.filterSustain,
+        fmRatio: fmRatio ?? this.fmRatio,
+        fmIndex: fmIndex ?? this.fmIndex,
+        fmDecay: fmDecay ?? this.fmDecay,
+        fmFeedback: fmFeedback ?? this.fmFeedback,
+        morphRate: morphRate ?? this.morphRate,
+      );
 }
+

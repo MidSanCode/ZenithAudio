@@ -8,6 +8,7 @@ import '../../providers/project_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/floating_window_provider.dart';
+import '../../services/synth_engine.dart' show TrackCompressorParams;
 import '../layout/rotary_knob.dart';
 import 'piano_roll_editor.dart';
 import 'audio_clip_editor.dart';
@@ -129,6 +130,16 @@ class TrackTile extends ConsumerWidget {
     if (track.type == TrackType.instrument) {
       items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
       items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
+      items.add(const PopupMenuItem(
+          value: 'compressor',
+          child: Row(children: [
+            Icon(track.compressor?.enabled == true
+                ? Icons.compress
+                : Icons.compress_outlined,
+                size: 16),
+            SizedBox(width: 8),
+            Text(track.compressor?.enabled == true ? '压缩器 ✓' : '压缩器'),
+          ])));
     } else if (track.type == TrackType.audio) {
       items.add(const PopupMenuItem(value: 'editAudio', child: Text('编辑音频')));
     }
@@ -170,6 +181,8 @@ class TrackTile extends ConsumerWidget {
           }
         case 'changeInstrument':
           _showChangeInstrumentDialog(context, ref);
+        case 'compressor':
+          _showCompressorDialog(context, ref);
         case 'delete':
           _showDeleteDialog(context, ref);
       }
@@ -263,6 +276,168 @@ class TrackTile extends ConsumerWidget {
     if (confirmed == true) {
       ref.read(projectProvider.notifier).removeTrack(track.id);
     }
+  }
+
+  void _showCompressorDialog(BuildContext context, WidgetRef ref) {
+    final cur = track.compressor ?? const TrackCompressorParams();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => _CompressorDialog(
+        initial: cur,
+        onApply: (params) {
+          ref
+              .read(projectProvider.notifier)
+              .setTrackCompressor(track.id, params);
+        },
+      ),
+    );
+  }
+}
+
+/// Per-track compressor editor: enable toggle + threshold/ratio/attack/
+/// release sliders with live numeric readouts.
+class _CompressorDialog extends StatefulWidget {
+  final TrackCompressorParams initial;
+  final ValueChanged<TrackCompressorParams> onApply;
+
+  const _CompressorDialog({required this.initial, required this.onApply});
+
+  @override
+  State<_CompressorDialog> createState() => _CompressorDialogState();
+}
+
+class _CompressorDialogState extends State<_CompressorDialog> {
+  late bool _enabled = widget.initial.enabled;
+  late double _threshold = widget.initial.threshold;
+  late double _ratio = widget.initial.ratio;
+  late double _attack = widget.initial.attack;
+  late double _release = widget.initial.release;
+
+  TrackCompressorParams get _params => TrackCompressorParams(
+        enabled: _enabled,
+        threshold: _threshold,
+        ratio: _ratio,
+        attack: _attack,
+        release: _release,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Row(children: [
+        Icon(Icons.compress, size: 20),
+        SizedBox(width: 8),
+        Text('轨道压缩器', style: TextStyle(fontSize: 16)),
+      ]),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('启用压缩', style: TextStyle(fontSize: 13)),
+              subtitle: const Text('加快衰减、压平动态(渲染时应用)',
+                  style: TextStyle(fontSize: 10)),
+              value: _enabled,
+              onChanged: (v) => setState(() => _enabled = v),
+            ),
+            const SizedBox(height: 4),
+            _row('阈值', _formatThreshold(), Slider(
+              value: _threshold,
+              min: 0.05,
+              max: 0.95,
+              onChanged: (v) => setState(() => _threshold = v),
+            )),
+            _row('比率', '${_ratio.toStringAsFixed(1)} : 1', Slider(
+              value: _ratio,
+              min: 1,
+              max: 20,
+              onChanged: (v) => setState(() => _ratio = v),
+            )),
+            _row('启动', '${(_attack * 1000).round()} ms', Slider(
+              value: _attack,
+              min: 0.0005,
+              max: 0.05,
+              onChanged: (v) => setState(() => _attack = v),
+            )),
+            _row('释放', '${(_release * 1000).round()} ms', Slider(
+              value: _release,
+              min: 0.01,
+              max: 0.5,
+              onChanged: (v) => setState(() => _release = v),
+            )),
+            const SizedBox(height: 6),
+            Text(
+              '预设:',
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+            Wrap(
+              spacing: 6,
+              children: [
+                OutlinedButton(
+                  onPressed: () => setState(() {
+                    _enabled = true; _threshold = 0.35; _ratio = 8; _attack = 0.002; _release = 0.05;
+                  }),
+                  child: const Text('快速衰减', style: TextStyle(fontSize: 11)),
+                ),
+                OutlinedButton(
+                  onPressed: () => setState(() {
+                    _enabled = true; _threshold = 0.5; _ratio = 3; _attack = 0.01; _release = 0.12;
+                  }),
+                  child: const Text('平滑 glue', style: TextStyle(fontSize: 11)),
+                ),
+                OutlinedButton(
+                  onPressed: () => setState(() {
+                    _enabled = true; _threshold = 0.25; _ratio = 12; _attack = 0.001; _release = 0.03;
+                  }),
+                  child: const Text('极限压平', style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            widget.onApply(const TrackCompressorParams(enabled: false));
+            Navigator.pop(context);
+          },
+          child: const Text('关闭压缩器'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            widget.onApply(_params);
+            Navigator.pop(context);
+          },
+          child: const Text('应用'),
+        ),
+      ],
+    );
+  }
+
+  String _formatThreshold() => '${(_threshold * 100).round()}%';
+
+  Widget _row(String label, String value, Widget slider) {
+    return Row(
+      children: [
+        SizedBox(width: 46, child: Text(label, style: const TextStyle(fontSize: 11))),
+        Expanded(child: slider),
+        SizedBox(
+          width: 52,
+          child: Text(value,
+              style: const TextStyle(fontSize: 10), textAlign: TextAlign.right),
+        ),
+      ],
+    );
   }
 }
 

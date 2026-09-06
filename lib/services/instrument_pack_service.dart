@@ -4,6 +4,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import '../models/instrument.dart';
+import '../models/envelope.dart';
 
 class InstrumentPack {
   final String name;
@@ -82,6 +83,22 @@ class InstrumentPackService {
         detuneCents: (inst['detuneCents'] as num?)?.toDouble() ?? 0,
         noiseAttack: (inst['noiseAttack'] as num?)?.toDouble() ?? 0,
         brightnessFactor: (inst['brightnessFactor'] as num?)?.toDouble() ?? 0.3,
+        synthEngine: inst['synthEngine'] as String?,
+        envCurve: inst['envCurve'] != null
+            ? EnvelopeCurve.fromJson(inst['envCurve'] as Map<String, dynamic>)
+            : null,
+        filterType: inst['filterType'] as String? ?? 'lowPass',
+        filterCutoff: (inst['filterCutoff'] as num?)?.toDouble() ?? 1200,
+        filterResonance: (inst['filterResonance'] as num?)?.toDouble() ?? 1.2,
+        filterEnvAmount: (inst['filterEnvAmount'] as num?)?.toDouble() ?? 2.0,
+        filterAttack: (inst['filterAttack'] as num?)?.toDouble() ?? 0.005,
+        filterDecay: (inst['filterDecay'] as num?)?.toDouble() ?? 0.3,
+        filterSustain: (inst['filterSustain'] as num?)?.toDouble() ?? 0.3,
+        fmRatio: (inst['fmRatio'] as num?)?.toDouble() ?? 2.0,
+        fmIndex: (inst['fmIndex'] as num?)?.toDouble() ?? 3.0,
+        fmDecay: (inst['fmDecay'] as num?)?.toDouble() ?? 0.8,
+        fmFeedback: (inst['fmFeedback'] as num?)?.toDouble() ?? 0.15,
+        morphRate: (inst['morphRate'] as num?)?.toDouble() ?? 0,
       ));
     }
     return list;
@@ -106,6 +123,20 @@ class InstrumentPackService {
       'detuneCents': p.detuneCents,
       'noiseAttack': p.noiseAttack,
       'brightnessFactor': p.brightnessFactor,
+      if (p.synthEngine != null) 'synthEngine': p.synthEngine,
+      if (p.envCurve != null) 'envCurve': p.envCurve!.toJson(),
+      'filterType': p.filterType,
+      'filterCutoff': p.filterCutoff,
+      'filterResonance': p.filterResonance,
+      'filterEnvAmount': p.filterEnvAmount,
+      'filterAttack': p.filterAttack,
+      'filterDecay': p.filterDecay,
+      'filterSustain': p.filterSustain,
+      'fmRatio': p.fmRatio,
+      'fmIndex': p.fmIndex,
+      'fmDecay': p.fmDecay,
+      'fmFeedback': p.fmFeedback,
+      'morphRate': p.morphRate,
     }).toList();
 
     return const JsonEncoder.withIndent('  ').convert({

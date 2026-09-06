@@ -8,6 +8,7 @@ import '../models/project.dart';
 import '../models/track.dart';
 import '../models/note.dart';
 import '../core/utils/logger.dart';
+import 'synth_engine.dart' show TrackCompressorParams;
 
 /// Result returned after deserializing a project archive on web.
 class SerializedProject {
@@ -149,6 +150,7 @@ class ProjectSerializer {
         if (t.type == TrackType.instrument) 'instrumentName': t.instrumentName,
         if (t.type == TrackType.instrument && t.notes.isNotEmpty)
           'notes': t.notes.map((n) => n.toJson()).toList(),
+        if (t.compressor != null) 'compressor': t.compressor!.toJson(),
         'color': '#${t.color.toARGB32().toRadixString(16).padLeft(8, '0')}',
         'duration': t.duration,
       };
@@ -199,6 +201,10 @@ class ProjectSerializer {
         audioFilePath: t['audioFile'] as String?,
         color: _parseColor(t['color'] as String?),
         duration: (t['duration'] as num?)?.toDouble() ?? 0,
+        compressor: t['compressor'] != null
+            ? TrackCompressorParams.fromJson(
+                t['compressor'] as Map<String, dynamic>)
+            : null,
       );
     }).toList();
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/constants/app_constants.dart';
-import 'note.dart';
+import '../models/note.dart';
+import '../services/synth_engine.dart' show TrackCompressorParams;
 
 enum TrackType { audio, instrument }
 
@@ -19,6 +20,9 @@ class Track {
   final double duration;
   final List<bool> stepPattern;
 
+  /// Per-track compressor (instrument tracks; null = disabled).
+  final TrackCompressorParams? compressor;
+
   const Track({
     required this.id,
     required this.name,
@@ -33,6 +37,7 @@ class Track {
     this.color = AppColors.waveform,
     this.duration = 0,
     this.stepPattern = const [],
+    this.compressor,
   });
 
   double get computedDuration {
@@ -57,6 +62,7 @@ class Track {
     Color? color,
     double? duration,
     List<bool>? stepPattern,
+    TrackCompressorParams? compressor,
   }) {
     return Track(
       id: id ?? this.id,
@@ -72,6 +78,7 @@ class Track {
       color: color ?? this.color,
       duration: duration ?? this.duration,
       stepPattern: stepPattern ?? this.stepPattern,
+      compressor: compressor ?? this.compressor,
     );
   }
 
