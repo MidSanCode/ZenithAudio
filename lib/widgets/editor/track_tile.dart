@@ -130,14 +130,14 @@ class TrackTile extends ConsumerWidget {
     if (track.type == TrackType.instrument) {
       items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
       items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
-      items.add(const PopupMenuItem(
+      items.add(PopupMenuItem(
           value: 'compressor',
           child: Row(children: [
             Icon(track.compressor?.enabled == true
                 ? Icons.compress
                 : Icons.compress_outlined,
                 size: 16),
-            SizedBox(width: 8),
+            const SizedBox(width: 8),
             Text(track.compressor?.enabled == true ? '压缩器 ✓' : '压缩器'),
           ])));
     } else if (track.type == TrackType.audio) {
