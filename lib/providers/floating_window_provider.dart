@@ -38,6 +38,7 @@ class FloatingWindowNotifier extends Notifier<List<FloatingWindowInstance>> {
     required String title,
     required WidgetBuilder builder,
     Future<void> Function()? onBeforeClose,
+    Size? size,
   }) {
     final id = _uuid.v4();
     final cascadeOffset = Offset(
@@ -53,6 +54,7 @@ class FloatingWindowNotifier extends Notifier<List<FloatingWindowInstance>> {
         builder: builder,
         onBeforeClose: onBeforeClose,
         position: cascadeOffset,
+        size: size ?? const Size(560, 420),
       ),
     ];
     return id;

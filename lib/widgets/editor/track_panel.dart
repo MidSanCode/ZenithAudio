@@ -8,18 +8,23 @@ import '../../core/utils/responsive_utils.dart';
 import 'track_tile.dart';
 
 class TrackPanel extends ConsumerWidget {
-  const TrackPanel({super.key});
+  final ScrollController? scrollController;
+
+  const TrackPanel({super.key, this.scrollController});
+
+  /// Width of the channel rack for the given screen size. Shared with the
+  /// timeline ruler spacer so the ruler starts where the lanes start.
+  static double widthFor(ScreenSize screenSize) => switch (screenSize) {
+        ScreenSize.mobile => 180.0,
+        ScreenSize.tablet => 200.0,
+        ScreenSize.desktop => AppConstants.trackPanelWidth,
+      };
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final project = ref.watch(projectProvider);
     final screenSize = getScreenSize(context);
-
-    final panelWidth = switch (screenSize) {
-      ScreenSize.mobile => 180.0,
-      ScreenSize.tablet => 200.0,
-      ScreenSize.desktop => AppConstants.trackPanelWidth,
-    };
+    final panelWidth = widthFor(screenSize);
 
     return Container(
       width: panelWidth,
@@ -60,6 +65,7 @@ class TrackPanel extends ConsumerWidget {
                     ),
                   )
                 : ListView.builder(
+                    controller: scrollController,
                     itemCount: project.tracks.length,
                     itemExtent: AppConstants.trackTileHeight,
                     itemBuilder: (context, index) => TrackTile(

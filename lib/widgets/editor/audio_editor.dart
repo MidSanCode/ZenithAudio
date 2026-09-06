@@ -15,6 +15,7 @@ import '../toolbar/tool_bar.dart';
 import '../layout/floating_window.dart';
 import '../mixer/mixer_panel.dart';
 import '../browser/browser_panel.dart';
+import '../../providers/browser_provider.dart';
 import 'timeline_ruler.dart';
 import 'track_panel.dart';
 import 'waveform_view.dart';
@@ -33,6 +34,8 @@ class AudioEditor extends ConsumerStatefulWidget {
 class _AudioEditorState extends ConsumerState<AudioEditor> {
   final ScrollController _rulerScrollCtrl = ScrollController();
   final ScrollController _waveformScrollCtrl = ScrollController();
+  final ScrollController _trackVScrollCtrl = ScrollController();
+  final ScrollController _channelVScrollCtrl = ScrollController();
   bool _syncing = false;
   bool _userInteracted = false;
 
@@ -43,6 +46,8 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
     super.initState();
     _rulerScrollCtrl.addListener(_onRulerScroll);
     _waveformScrollCtrl.addListener(_onWaveformScroll);
+    _trackVScrollCtrl.addListener(_onTrackVScroll);
+    _channelVScrollCtrl.addListener(_onChannelVScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_recoveryChecked) {
         _recoveryChecked = true;
@@ -55,8 +60,12 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
   void dispose() {
     _rulerScrollCtrl.removeListener(_onRulerScroll);
     _waveformScrollCtrl.removeListener(_onWaveformScroll);
+    _trackVScrollCtrl.removeListener(_onTrackVScroll);
+    _channelVScrollCtrl.removeListener(_onChannelVScroll);
     _rulerScrollCtrl.dispose();
     _waveformScrollCtrl.dispose();
+    _trackVScrollCtrl.dispose();
+    _channelVScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -65,6 +74,27 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
     _syncing = true;
     if (_waveformScrollCtrl.hasClients) {
       _waveformScrollCtrl.jumpTo(_rulerScrollCtrl.offset);
+    }
+    _syncing = false;
+  }
+
+  /// Keep the channel rack (left) locked to the track lanes (right).
+  void _onTrackVScroll() {
+    if (_syncing) return;
+    _syncing = true;
+    if (_channelVScrollCtrl.hasClients) {
+      final maxOffset = _channelVScrollCtrl.position.maxScrollExtent;
+      _channelVScrollCtrl.jumpTo(_trackVScrollCtrl.offset.clamp(0.0, maxOffset));
+    }
+    _syncing = false;
+  }
+
+  void _onChannelVScroll() {
+    if (_syncing) return;
+    _syncing = true;
+    if (_trackVScrollCtrl.hasClients) {
+      final maxOffset = _trackVScrollCtrl.position.maxScrollExtent;
+      _trackVScrollCtrl.jumpTo(_channelVScrollCtrl.offset.clamp(0.0, maxOffset));
     }
     _syncing = false;
   }
@@ -244,8 +274,12 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                       children: [
                         Row(
                           children: [
-                            if (screenSize != ScreenSize.mobile)
-                              const SizedBox(width: AppConstants.trackPanelWidth),
+                            // Mirror the left panels below (Browser + Track
+                            // rack) so the ruler starts exactly where the
+                            // track lanes do.
+                            if (ref.watch(browserVisibilityProvider))
+                              const SizedBox(width: AppConstants.browserPanelWidth),
+                            SizedBox(width: TrackPanel.widthFor(screenSize)),
                             Expanded(
                               child: ClipRect(
                                 child: SingleChildScrollView(
@@ -269,7 +303,9 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                           child: Row(
                             children: [
                               const BrowserPanel(),
-                              const TrackPanel(),
+                              TrackPanel(
+                                scrollController: _channelVScrollCtrl,
+                              ),
                               Expanded(
                                 child: ClipRect(
                                   child: Stack(
@@ -283,6 +319,7 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                                               child: SizedBox(
                                                 width: totalWidth,
                                                 child: ListView.builder(
+                                                  controller: _trackVScrollCtrl,
                                                   itemCount: project.tracks.length,
                                                   itemExtent: AppConstants.trackTileHeight,
                                                   itemBuilder: (context, index) {

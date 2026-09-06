@@ -20,6 +20,7 @@
   "menu.track.importAudio": "导入音频文件",
   "menu.track.importMidi": "导入MIDI",
   "menu.track.addInstrument": "添加乐器",
+  "menu.track.addSynth": "添加合成器",
   "menu.track.chooseTemplate": "选择模板",
   "menu.track.comingSoon": "即将推出",
   "menu.track.add": "添加音轨",

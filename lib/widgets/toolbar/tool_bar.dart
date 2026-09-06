@@ -14,7 +14,6 @@ import '../../services/audio_converter.dart';
 import '../../screens/settings_page.dart';
 import '../../screens/about_dialog.dart' as app;
 import '../../core/utils/logger.dart';
-
 class AudioToolBar extends ConsumerWidget {
   const AudioToolBar({super.key});
 
@@ -177,17 +176,6 @@ class AudioToolBar extends ConsumerWidget {
                 final idx = ref.read(projectProvider).tracks.length + 1;
                 ref.read(projectProvider.notifier).addInstrumentTrack(
                   name: 'Track $idx', instrumentName: inst,
-                );
-              },
-            ),
-            _TbBtn(
-              icon: Icons.settings_input_component,
-              tooltip: 'Add Synth',
-              iconSize: 14,
-              onTap: () {
-                final idx = ref.read(projectProvider).tracks.length + 1;
-                ref.read(projectProvider.notifier).addInstrumentTrack(
-                  name: 'Track $idx', instrumentName: 'synth',
                 );
               },
             ),

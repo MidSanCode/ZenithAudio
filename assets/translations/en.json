@@ -20,6 +20,7 @@
   "menu.track.importAudio": "Import Audio File",
   "menu.track.importMidi": "Import MIDI",
   "menu.track.addInstrument": "Add Instrument",
+  "menu.track.addSynth": "Add Synth",
   "menu.track.chooseTemplate": "Choose Template",
   "menu.track.comingSoon": "Coming Soon",
   "menu.track.add": "Add Track",

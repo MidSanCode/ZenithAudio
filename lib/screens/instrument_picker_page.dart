@@ -244,16 +244,9 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
   Future<void> _openSynthEditor(InstrumentPreset preset) async {
     await SynthEditorDialog.show(context, preset, (edited) async {
       // Built-ins become a new saved copy; customs overwrite in place.
-      final InstrumentPreset toSave;
-      if (edited.id.startsWith('syn_')) {
-        final copyId = 'custom_${DateTime.now().millisecondsSinceEpoch}';
-        toSave = edited.copyWith(id: copyId);
-      } else {
-        toSave = edited;
-      }
-      await InstrumentPreset.saveUserCustom(toSave);
+      final savedId = await saveSynthEdit(edited);
       _previewCache.clear();
-      if (mounted) setState(() => _selectedId = toSave.id);
+      if (mounted) setState(() => _selectedId = savedId);
     });
   }
 

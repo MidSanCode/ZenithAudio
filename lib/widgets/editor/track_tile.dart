@@ -12,6 +12,7 @@ import '../../services/synth_engine.dart' show TrackCompressorParams;
 import '../layout/rotary_knob.dart';
 import 'piano_roll_editor.dart';
 import 'audio_clip_editor.dart';
+import 'synth_editor_dialog.dart' show SynthEditorLauncher;
 
 String _formatDuration(double sec) {
   final m = (sec ~/ 60).toString().padLeft(2, '0');
@@ -130,6 +131,7 @@ class TrackTile extends ConsumerWidget {
     if (track.type == TrackType.instrument) {
       items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
       items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
+      items.add(const PopupMenuItem(value: 'editSynth', child: Text('合成器编辑')));
       items.add(PopupMenuItem(
           value: 'compressor',
           child: Row(children: [
@@ -181,6 +183,8 @@ class TrackTile extends ConsumerWidget {
           }
         case 'changeInstrument':
           _showChangeInstrumentDialog(context, ref);
+        case 'editSynth':
+          _openSynthEditor(context, ref);
         case 'compressor':
           _showCompressorDialog(context, ref);
         case 'delete':
@@ -222,6 +226,10 @@ class TrackTile extends ConsumerWidget {
     if (instrument != null) {
       ref.read(projectProvider.notifier).setTrackInstrument(track.id, instrument);
     }
+  }
+
+  void _openSynthEditor(BuildContext context, WidgetRef ref) {
+    SynthEditorLauncher.openForTrack(context, ref, track);
   }
 
   void _showPropertiesDialog(BuildContext context) {

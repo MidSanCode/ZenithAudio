@@ -6,6 +6,7 @@ import '../../core/utils/theme_colors.dart';
 import '../../core/instrument_picker.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
+import '../editor/synth_editor_dialog.dart' show SynthEditorLauncher;
 import '../../services/file_service.dart';
 import '../../services/audio_converter.dart';
 import '../../screens/settings_page.dart';
@@ -141,6 +142,18 @@ class AudioMenuBar extends ConsumerWidget {
                   final name = 'Track $trackIndex';
                   ref.read(projectProvider.notifier).addInstrumentTrack(name: name, instrumentName: instrument);
                   AppLogger.i('Added instrument track: $name ($instrument)');
+                },
+              ),
+              MenuItem(
+                label: 'menu.track.addSynth'.tr(),
+                onTap: () {
+                  final trackIndex = ref.read(projectProvider).tracks.length + 1;
+                  final name = 'Synth $trackIndex';
+                  final notifier = ref.read(projectProvider.notifier);
+                  notifier.addInstrumentTrack(name: name, instrumentName: 'syn_supersaw');
+                  final newTrack = ref.read(projectProvider).tracks.last;
+                  SynthEditorLauncher.openForTrack(context, ref, newTrack);
+                  AppLogger.i('Added synth track: $name');
                 },
               ),
               MenuItem.disabled(
