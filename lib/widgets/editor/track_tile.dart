@@ -9,6 +9,7 @@ import '../../providers/settings_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/floating_window_provider.dart';
 import '../../services/synth_engine.dart' show TrackCompressorParams;
+import '../../models/instrument.dart';
 import '../layout/rotary_knob.dart';
 import 'piano_roll_editor.dart';
 import 'audio_clip_editor.dart';
@@ -131,7 +132,12 @@ class TrackTile extends ConsumerWidget {
     if (track.type == TrackType.instrument) {
       items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
       items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
-      items.add(const PopupMenuItem(value: 'editSynth', child: Text('合成器编辑')));
+      final synthPreset = track.instrumentName == null
+          ? null
+          : InstrumentPreset.fromIdOrNull(track.instrumentName!);
+      if (synthPreset != null && SynthEditorLauncher.isEditable(synthPreset)) {
+        items.add(const PopupMenuItem(value: 'editSynth', child: Text('合成器编辑')));
+      }
       items.add(PopupMenuItem(
           value: 'compressor',
           child: Row(children: [
