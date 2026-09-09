@@ -395,13 +395,14 @@ class AudioService {
   /// are heard immediately. No-op when paused/stopped.
   Future<void> hotSwapTrackWav(Track track) async {
     if (!_isPlaying) return;
-    if (track.isInstrument == false || track.instrumentName == null ||
+    if (!track.isInstrument || track.instrumentName == null ||
         track.notes.isEmpty) {
       return;
     }
 
-    // 1. Render the new WAV (cache entry updated by prepareInstrumentTrack).
-    final newPath = await prepareInstrumentTrack(track);
+    // 1. Render the new WAV on a background isolate (cache entry updated by
+    //    prepareInstrumentTrack).
+    final newPath = await prepareInstrumentTrack(track, useIsolate: true);
     if (newPath == null) return;
 
     // 2. Capture the old player's position, volume and solo/mute before

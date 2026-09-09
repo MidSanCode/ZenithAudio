@@ -215,7 +215,7 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
           const Spacer(),
           _ToolChip(
             icon: Icons.library_music,
-            label: '和弦',
+            label: 'pianoRoll.chordTool'.tr(),
             onTap: _openChordGenerator,
           ),
           const SizedBox(width: 4),

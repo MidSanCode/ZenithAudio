@@ -50,26 +50,28 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
     // Live editing: while the transport is rolling, re-render any instrument
     // track whose notes/params changed and hot-swap its WAV so the newly
     // drawn notes are heard immediately.
-    List<Track>? lastTracks;
+    List<Track> lastTracks = ref.read(projectProvider).tracks;
     ref.listen(projectProvider, (_, next) {
-      final wasPlaying = state == PlaybackState.playing && audio.isPlaying;
-      if (!wasPlaying) {
-        lastTracks = next.tracks;
-        return;
-      }
       final prev = lastTracks;
       lastTracks = next.tracks;
-      if (prev == null) return;
+      final wasPlaying = state == PlaybackState.playing && audio.isPlaying;
+      if (!wasPlaying || prev == null) return;
       for (final t in next.tracks) {
         if (!t.isInstrument) continue;
         final before = prev.where((p) => p.id == t.id).firstOrNull;
         if (before == null) continue; // newly added during playback
         final changed = before.instrumentName != t.instrumentName ||
             !listEquals(before.notes, t.notes) ||
-            !identical(before.compressor, t.compressor) &&
-                before.compressor != t.compressor;
+            before.compressor != t.compressor;
         if (!changed) continue;
-        if (t.notes.isEmpty) continue;
+        if (t.notes.isEmpty) {
+          // All notes removed: silence this track right away.
+          _swapTimers[t.id]?.cancel();
+          _swapTimers.remove(t.id);
+          _pendingSwap.remove(t.id);
+          ref.read(audioServiceProvider).stopAndUnloadTrack(t.id);
+          continue;
+        }
         // Debounce rapid drag edits; the last state after the window wins.
         _pendingSwap[t.id] = t;
         _scheduleHotSwap(t.id);
@@ -84,7 +86,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
 
   void _scheduleHotSwap(String trackId) {
     _swapTimers[trackId]?.cancel();
-    _swapTimers[trackId] = Timer(const Duration(milliseconds: 350), () async {
+    _swapTimers[trackId] = Timer(const Duration(milliseconds: 250), () async {
       _swapTimers.remove(trackId);
       final track = _pendingSwap.remove(trackId);
       if (track == null) return;
