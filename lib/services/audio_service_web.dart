@@ -212,9 +212,36 @@ class AudioService {
     return _cachedPaths.containsKey(track.id);
   }
 
+  /// Web stub: no mpv pipeline to introspect.
+  AudioOutputInfo? getOutputInfo() => null;
+
+  /// Web stub: hot-swap during playback is unsupported.
+  Future<void> hotSwapTrackWav(Track track) async {}
+
   void dispose() {
     unloadAll();
   }
+}
+
+/// Snapshot of the live audio pipeline for the song-info panel.
+class AudioOutputInfo {
+  final int? sampleRate;
+  final int? channels;
+  final String? sampleFormat;
+  final double? bitrateKbps;
+  final String deviceName;
+  final String deviceDescription;
+  final List<(String, String)> availableDevices;
+
+  const AudioOutputInfo({
+    this.sampleRate,
+    this.channels,
+    this.sampleFormat,
+    this.bitrateKbps,
+    required this.deviceName,
+    required this.deviceDescription,
+    this.availableDevices = const [],
+  });
 }
 
 class _TrackPlayer {

@@ -12,8 +12,7 @@ class TrackPanel extends ConsumerWidget {
 
   const TrackPanel({super.key, this.scrollController});
 
-  /// Width of the channel rack for the given screen size. Shared with the
-  /// timeline ruler spacer so the ruler starts where the lanes start.
+  /// Default width of the channel rack for the given screen size.
   static double widthFor(ScreenSize screenSize) => switch (screenSize) {
         ScreenSize.mobile => 180.0,
         ScreenSize.tablet => 200.0,
@@ -23,11 +22,11 @@ class TrackPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final project = ref.watch(projectProvider);
-    final screenSize = getScreenSize(context);
-    final panelWidth = widthFor(screenSize);
 
+    // Width is controlled by the parent (resizable rack width on desktop;
+    // the mobile default via TrackPanel.widthFor in a SizedBox wrapper).
     return Container(
-      width: panelWidth,
+      width: double.infinity,
       decoration: BoxDecoration(
         color: context.surfaceHigh,
         border: Border(

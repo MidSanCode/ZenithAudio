@@ -16,6 +16,9 @@ import '../layout/floating_window.dart';
 import '../mixer/mixer_panel.dart';
 import '../browser/browser_panel.dart';
 import '../../providers/browser_provider.dart';
+import '../../providers/layout_provider.dart';
+import '../../providers/mixer_provider.dart';
+import '../layout/resize_handle.dart';
 import 'timeline_ruler.dart';
 import 'track_panel.dart' show TrackPanel, ChannelRackHeader;
 import 'waveform_view.dart';
@@ -237,6 +240,15 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
     final cs = Theme.of(context).colorScheme;
     final screenSize = getScreenSize(context);
     final totalWidth = (project.duration > 0 ? project.duration : 60) * pps;
+    // Resizable workspace panels.
+    final isMobile = screenSize == ScreenSize.mobile;
+    final rackWidth = isMobile
+        ? TrackPanel.widthFor(screenSize)
+        : ref.watch(trackPanelWidthProvider).clamp(180.0, 460.0);
+    final mixerH = ref
+        .watch(mixerHeightProvider)
+        .clamp(AppConstants.mixerPanelCollapsedHeight + 90.0, 480.0);
+    final mixerExpanded = ref.watch(mixerProvider).isExpanded;
 
     // Listen for playback state changes to reset user-interacted on play.
     ref.listen<PlaybackState>(playbackProvider, (_, next) {
@@ -280,9 +292,13 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                             if (ref.watch(browserVisibilityProvider))
                               const SizedBox(width: AppConstants.browserPanelWidth),
                             SizedBox(
-                              width: TrackPanel.widthFor(screenSize),
+                              width: rackWidth,
                               child: ChannelRackHeader(),
                             ),
+                            // Mirror the rack-resize handle so the ruler
+                            // starts exactly where the lanes do.
+                            if (!isMobile)
+                              const SizedBox(width: ResizeHandle.thickness),
                             Expanded(
                               child: ClipRect(
                                 child: SingleChildScrollView(
@@ -306,8 +322,19 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                           child: Row(
                             children: [
                               const BrowserPanel(),
-                              TrackPanel(
-                                scrollController: _channelVScrollCtrl,
+                              SizedBox(
+                                width: rackWidth,
+                                child: TrackPanel(
+                                  scrollController: _channelVScrollCtrl,
+                                ),
+                              ),
+                              ResizeHandle(
+                                axis: Axis.vertical,
+                                onDrag: (dx) => ref
+                                        .read(trackPanelWidthProvider.notifier)
+                                        .state =
+                                    (ref.read(trackPanelWidthProvider) + dx)
+                                        .clamp(180.0, 460.0),
                               ),
                               Expanded(
                                 child: ClipRect(
@@ -393,7 +420,14 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
                     ),
                   ),
                 ),
-                const MixerPanel(),
+                if (mixerExpanded)
+                  ResizeHandle(
+                    axis: Axis.horizontal,
+                    onDrag: (dy) =>
+                        ref.read(mixerHeightProvider.notifier).state =
+                            ref.read(mixerHeightProvider) - dy,
+                  ),
+                MixerPanel(),
               ],
             ),
             // Floating windows overlay

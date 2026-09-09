@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/track.dart';
 import '../services/audio_service.dart';
@@ -44,7 +46,53 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
         ref.read(playheadPositionProvider.notifier).state = 0;
       }
     };
+
+    // Live editing: while the transport is rolling, re-render any instrument
+    // track whose notes/params changed and hot-swap its WAV so the newly
+    // drawn notes are heard immediately.
+    List<Track>? lastTracks;
+    ref.listen(projectProvider, (_, next) {
+      final wasPlaying = state == PlaybackState.playing && audio.isPlaying;
+      if (!wasPlaying) {
+        lastTracks = next.tracks;
+        return;
+      }
+      final prev = lastTracks;
+      lastTracks = next.tracks;
+      if (prev == null) return;
+      for (final t in next.tracks) {
+        if (!t.isInstrument) continue;
+        final before = prev.where((p) => p.id == t.id).firstOrNull;
+        if (before == null) continue; // newly added during playback
+        final changed = before.instrumentName != t.instrumentName ||
+            !listEquals(before.notes, t.notes) ||
+            !identical(before.compressor, t.compressor) &&
+                before.compressor != t.compressor;
+        if (!changed) continue;
+        if (t.notes.isEmpty) continue;
+        // Debounce rapid drag edits; the last state after the window wins.
+        _pendingSwap[t.id] = t;
+        _scheduleHotSwap(t.id);
+      }
+    });
+
     return PlaybackState.stopped;
+  }
+
+  final Map<String, Timer> _swapTimers = {};
+  final Map<String, Track> _pendingSwap = {};
+
+  void _scheduleHotSwap(String trackId) {
+    _swapTimers[trackId]?.cancel();
+    _swapTimers[trackId] = Timer(const Duration(milliseconds: 350), () async {
+      _swapTimers.remove(trackId);
+      final track = _pendingSwap.remove(trackId);
+      if (track == null) return;
+      if (state != PlaybackState.playing) return;
+      try {
+        await ref.read(audioServiceProvider).hotSwapTrackWav(track);
+      } catch (_) {}
+    });
   }
 
   Future<void> _restart() async {

@@ -20,12 +20,34 @@ final audioServiceProvider = Provider<AudioService>((ref) {
   return service;
 });
 
+/// Snapshot of the live audio pipeline for the song-info panel.
+class AudioOutputInfo {
+  final int? sampleRate;
+  final int? channels;
+  final String? sampleFormat;
+  final double? bitrateKbps;
+  final String deviceName;
+  final String deviceDescription;
+  final List<(String, String)> availableDevices;
+
+  const AudioOutputInfo({
+    this.sampleRate,
+    this.channels,
+    this.sampleFormat,
+    this.bitrateKbps,
+    required this.deviceName,
+    required this.deviceDescription,
+    this.availableDevices = const [],
+  });
+}
+
 class _TrackPlayer {
   final Player player;
   StreamSubscription? completedSub;
   StreamSubscription? positionSub;
   StreamSubscription? durationSub;
   bool _disposed = false;
+  bool reachedEnd = false;
   double trackVolume = 1.0;
 
   _TrackPlayer(this.player);
@@ -54,11 +76,10 @@ class _WavCache {
 class AudioService {
   final Map<String, _TrackPlayer> _players = {};
   final Map<String, _WavCache> _wavCache = {};
+  final Set<String> _pendingDelete = {};
   bool _isPlaying = false;
   double _masterVolume = 1.0;
   double _playbackSpeed = 1.0;
-  int _completedTracks = 0;
-  int _totalTracks = 0;
 
   void Function(double position)? onPositionChanged;
   void Function()? onCompleted;
@@ -95,8 +116,8 @@ class AudioService {
       tp.completedSub = player.stream.completed.listen((completed) {
         if (tp._disposed) return;
         if (completed) {
-          _completedTracks++;
-          if (_completedTracks >= _totalTracks) {
+          tp.reachedEnd = true;
+          if (_players.values.every((p) => p._disposed || p.reachedEnd)) {
             _isPlaying = false;
             onCompleted?.call();
           }
@@ -111,7 +132,6 @@ class AudioService {
         onPositionChanged?.call(position.inMilliseconds / 1000.0);
       });
 
-      _totalTracks++;
       double dur = player.state.duration.inMilliseconds / 1000.0;
       if (dur <= 0) {
         try {
@@ -170,10 +190,24 @@ class AudioService {
     }
 
     final dir = await getTemporaryDirectory();
-    final filePath = '${dir.path}/synth_${track.id}.wav';
+    // Unique-per-hash file name: the previous WAV may still be open by the
+    // player while a hot-swap re-render happens (Windows sharing violation).
+    final filePath = '${dir.path}/synth_${track.id}_${noteHash.abs()}.wav';
     await File(filePath).writeAsBytes(wav);
 
+    final oldPath = _wavCache[track.id]?.path;
     _wavCache[track.id] = _WavCache(filePath, noteHash);
+    if (oldPath != null && oldPath != filePath) {
+      if (_players.containsKey(track.id)) {
+        // Still playing the old file — delete it after the hot swap.
+        _pendingDelete.add(oldPath);
+      } else {
+        try {
+          final f = File(oldPath);
+          if (f.existsSync()) f.deleteSync();
+        } catch (_) {}
+      }
+    }
     return filePath;
   }
 
@@ -283,8 +317,8 @@ class AudioService {
       tp.completedSub = player.stream.completed.listen((completed) {
         if (tp._disposed) return;
         if (completed) {
-          _completedTracks++;
-          if (_completedTracks >= _totalTracks) {
+          tp.reachedEnd = true;
+          if (_players.values.every((p) => p._disposed || p.reachedEnd)) {
             _isPlaying = false;
             onCompleted?.call();
           }
@@ -298,7 +332,6 @@ class AudioService {
         _lastPositionUpdate = now;
         onPositionChanged?.call(position.inMilliseconds / 1000.0);
       });
-      _totalTracks++;
     } catch (e) {
       tp.dispose();
     }
@@ -306,6 +339,40 @@ class AudioService {
 
   /// Returns the cached WAV path for a track, or null if not cached.
   String? getCachedTrackPath(String trackId) => _wavCache[trackId]?.path;
+
+  /// Snapshot of the active audio output (device, params, bitrate) from the
+  /// first live player. Returns null when nothing is loaded yet.
+  AudioOutputInfo? getOutputInfo() {
+    final tp = _players.values
+        .where((p) => !p._disposed && p.player.state.playlist.medias.isNotEmpty)
+        .firstOrNull;
+    if (tp == null) return null;
+    final st = tp.player.state;
+    final params = st.audioParams;
+    final dev = st.audioDevice;
+    final desc = dev.name == 'auto'
+        ? st.audioDevices
+                .where((d) => d.name == 'auto')
+                .map((d) => d.description)
+                .firstOrNull ??
+            dev.description
+        : st.audioDevices
+                .where((d) => d.name == dev.name)
+                .map((d) => d.description)
+                .firstOrNull ??
+            dev.description;
+    return AudioOutputInfo(
+      sampleRate: params.sampleRate,
+      channels: params.channelCount,
+      sampleFormat: params.format,
+      bitrateKbps: st.audioBitrate,
+      deviceName: dev.name,
+      deviceDescription: desc.isEmpty ? dev.name : desc,
+      availableDevices: st.audioDevices
+          .map((d) => (d.name, d.description.isEmpty ? d.name : d.description))
+          .toList(),
+    );
+  }
 
   /// Check if track WAV is cached with current notes.
   bool isTrackCached(Track track) {
@@ -319,6 +386,39 @@ class AudioService {
             .join(',');
     final noteHash = Object.hash(track.instrumentName, Object.hashAll(track.notes), compKey);
     return cached.noteHash == noteHash;
+  }
+
+  /// Hot-swap a playing track's WAV without touching other tracks.
+  ///
+  /// Used when the user edits notes while the transport is rolling: the new
+  /// WAV replaces the old one at the current playhead so freshly drawn notes
+  /// are heard immediately. No-op when paused/stopped.
+  Future<void> hotSwapTrackWav(Track track) async {
+    if (!_isPlaying) return;
+    if (track.isInstrument == false || track.instrumentName == null ||
+        track.notes.isEmpty) {
+      return;
+    }
+
+    // 1. Render the new WAV (cache entry updated by prepareInstrumentTrack).
+    final newPath = await prepareInstrumentTrack(track);
+    if (newPath == null) return;
+
+    // 2. Capture the old player's position, volume and solo/mute before
+    //    tearing it down, then open the new media at that offset.
+    final tp = _players[track.id];
+    final pos = tp?.player.state.position ?? Duration.zero;
+    final volume = tp?.trackVolume ?? track.volume;
+    final muted = track.isMuted || volume <= 0;
+
+    // 3. Reuse loadTrackFromPath (handles subscriptions/counters), then seek
+    //    the fresh player to the previous position and resume.
+    await loadTrackFromPath(track.id, newPath, volume: volume, muted: muted);
+    final fresh = _players[track.id];
+    if (fresh != null && !fresh._disposed) {
+      if (pos > Duration.zero) await fresh.player.seek(pos);
+      fresh.player.play();
+    }
   }
 
   void updateTrackVolume(String trackId, double volume) {
@@ -352,10 +452,10 @@ class AudioService {
 
   Future<void> play() async {
     if (_players.isEmpty) return;
+    await _cleanupPendingDeletes();
     _isPlaying = true;
-    _completedTracks = 0;
-    _totalTracks = _players.length;
     for (final tp in _players.values) {
+      tp.reachedEnd = false;
       if (!tp._disposed) tp.player.play();
     }
   }
@@ -382,6 +482,7 @@ class AudioService {
     for (final tp in _players.values) {
       if (!tp._disposed) tp.player.pause();
     }
+    await _cleanupPendingDeletes();
   }
 
   Future<void> stop() async {
@@ -389,6 +490,7 @@ class AudioService {
     for (final tp in _players.values) {
       if (!tp._disposed) tp.player.stop();
     }
+    await _cleanupPendingDeletes();
   }
 
   Future<void> seekTo(double seconds) async {
@@ -409,8 +511,19 @@ class AudioService {
     }
     _players.clear();
     _isPlaying = false;
-    _completedTracks = 0;
-    _totalTracks = 0;
+  }
+
+  /// Delete temp WAVs queued while a playing player still held them open.
+  Future<void> _cleanupPendingDeletes() async {
+    if (_pendingDelete.isEmpty) return;
+    final doomed = List<String>.from(_pendingDelete);
+    _pendingDelete.clear();
+    for (final path in doomed) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
   }
 
   Future<void> dispose() async {

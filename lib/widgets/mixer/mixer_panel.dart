@@ -7,6 +7,7 @@ import '../../models/project.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/mixer_provider.dart';
+import '../../providers/layout_provider.dart';
 import '../layout/rotary_knob.dart';
 
 class MixerPanel extends ConsumerWidget {
@@ -159,7 +160,10 @@ class _MixerStrips extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isPlaying = ref.watch(playbackProvider) == PlaybackState.playing;
     final stripWidth = 52.0;
-    final stripHeight = AppConstants.mixerPanelHeight - AppConstants.mixerPanelCollapsedHeight;
+    // Resizable: drag the divider above the mixer header (see audio_editor).
+    final mixerH = ref.watch(mixerHeightProvider).clamp(
+        AppConstants.mixerPanelCollapsedHeight + 90.0, 480.0);
+    final stripHeight = mixerH - AppConstants.mixerPanelCollapsedHeight;
 
     return Container(
       height: stripHeight,

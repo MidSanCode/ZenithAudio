@@ -13,6 +13,7 @@ import '../../services/file_service.dart';
 import '../../services/audio_converter.dart';
 import '../../screens/settings_page.dart';
 import '../../screens/about_dialog.dart' as app;
+import '../editor/song_info_dialog.dart';
 import '../../core/utils/logger.dart';
 class AudioToolBar extends ConsumerWidget {
   const AudioToolBar({super.key});
@@ -38,17 +39,17 @@ class AudioToolBar extends ConsumerWidget {
           // ── File operations ──
           _TbBtn(
             icon: Icons.note_add_outlined,
-            tooltip: 'New',
+            tooltip: 'toolbar.newProject'.tr(),
             onTap: () => ref.read(projectProvider.notifier).tryNewProject(context),
           ),
           _TbBtn(
             icon: Icons.folder_open_outlined,
-            tooltip: 'Open',
+            tooltip: 'toolbar.openProject'.tr(),
             onTap: () => ref.read(projectProvider.notifier).openProject(),
           ),
           _TbBtn(
             icon: Icons.save_outlined,
-            tooltip: 'Save',
+            tooltip: 'toolbar.saveProject'.tr(),
             onTap: () => ref.read(projectProvider.notifier).saveProject(),
           ),
           _TbSep(),
@@ -56,12 +57,12 @@ class AudioToolBar extends ConsumerWidget {
           // ── Undo / Redo ──
           _TbBtn(
             icon: Icons.undo_outlined,
-            tooltip: 'Undo',
+            tooltip: 'toolbar.undo'.tr(),
             onTap: () => ref.read(projectProvider.notifier).undo(),
           ),
           _TbBtn(
             icon: Icons.redo_outlined,
-            tooltip: 'Redo',
+            tooltip: 'toolbar.redo'.tr(),
             onTap: () => ref.read(projectProvider.notifier).redo(),
           ),
           _TbSep(),
@@ -69,7 +70,7 @@ class AudioToolBar extends ConsumerWidget {
           // ── Transport ──
           _TbBtn(
             icon: Icons.skip_previous_rounded,
-            tooltip: 'Skip to Start',
+            tooltip: 'transport.skipStart'.tr(),
             iconSize: 14,
             onTap: () => ref.read(playbackProvider.notifier).seekTo(0),
           ),
@@ -77,26 +78,28 @@ class AudioToolBar extends ConsumerWidget {
             icon: playback == PlaybackState.playing
                 ? Icons.pause_rounded
                 : Icons.play_arrow_rounded,
-            tooltip: playback == PlaybackState.playing ? 'Pause' : 'Play',
+            tooltip: playback == PlaybackState.playing
+                ? 'transport.pause'.tr()
+                : 'transport.play'.tr(),
             iconSize: 18,
             isPrimary: true,
             onTap: () => ref.read(playbackProvider.notifier).toggle(),
           ),
           _TbBtn(
             icon: Icons.stop_rounded,
-            tooltip: 'Stop',
+            tooltip: 'transport.stop'.tr(),
             iconSize: 14,
             onTap: () => ref.read(playbackProvider.notifier).stop(),
           ),
           _TbBtn(
             icon: Icons.fiber_manual_record_rounded,
-            tooltip: 'Record',
+            tooltip: 'transport.record'.tr(),
             iconSize: 12,
             onTap: () {},
           ),
           _TbBtn(
             icon: Icons.skip_next_rounded,
-            tooltip: 'Skip to End',
+            tooltip: 'transport.skipEnd'.tr(),
             iconSize: 14,
             onTap: () {
               final dur = project.duration > 0 ? project.duration : 60.0;
@@ -105,7 +108,7 @@ class AudioToolBar extends ConsumerWidget {
           ),
           _TbBtn(
             icon: loop ? Icons.loop_rounded : Icons.loop_outlined,
-            tooltip: loop ? 'Loop On' : 'Loop Off',
+            tooltip: 'settings.playback.autoLoop'.tr(),
             iconSize: 14,
             active: loop,
             activeColor: AppColors.neonGreen,
@@ -144,7 +147,7 @@ class AudioToolBar extends ConsumerWidget {
           // ── Snap toggle ──
           _TbBtn(
             icon: Icons.grid_on_outlined,
-            tooltip: 'Snap to Grid',
+            tooltip: 'settings.pianoRoll.snapToGrid'.tr(),
             iconSize: 14,
             active: ref.watch(settingsProvider).snapToGrid,
             activeColor: AppColors.accent,
@@ -155,11 +158,11 @@ class AudioToolBar extends ConsumerWidget {
           ),
           _TbSep(),
 
-          // ── Add Track / Settings / Zoom / Menu ──
+          // ── Add Track / Song Info / Settings / Zoom / Menu ──
           if (!isMobile) ...[
             _TbBtn(
               icon: Icons.add,
-              tooltip: 'Add Audio Track',
+              tooltip: 'toolbar.addTrack'.tr(),
               iconSize: 16,
               onTap: () {
                 final idx = ref.read(projectProvider).tracks.length + 1;
@@ -168,7 +171,7 @@ class AudioToolBar extends ConsumerWidget {
             ),
             _TbBtn(
               icon: Icons.piano_outlined,
-              tooltip: 'Add Instrument',
+              tooltip: 'toolbar.addInstrumentTrack'.tr(),
               iconSize: 14,
               onTap: () async {
                 final inst = await showInstrumentPicker(context);
@@ -184,7 +187,7 @@ class AudioToolBar extends ConsumerWidget {
             icon: ref.watch(browserVisibilityProvider)
                 ? Icons.folder_rounded
                 : Icons.folder_outlined,
-            tooltip: 'Browser',
+            tooltip: 'toolbar.browser'.tr(),
             iconSize: 14,
             onTap: () {
               final v = ref.read(browserVisibilityProvider.notifier);
@@ -192,14 +195,20 @@ class AudioToolBar extends ConsumerWidget {
             },
           ),
           _TbBtn(
+            icon: Icons.info_outline_rounded,
+            tooltip: 'songInfo.title'.tr(),
+            iconSize: 14,
+            onTap: () => SongInfoDialog.show(context),
+          ),
+          _TbBtn(
             icon: Icons.tune_outlined,
-            tooltip: 'Project Settings',
+            tooltip: 'toolbar.projectSettings'.tr(),
             iconSize: 14,
             onTap: () => _showSettingsDialog(context, ref),
           ),
           _TbBtn(
             icon: Icons.zoom_in_outlined,
-            tooltip: 'Zoom In',
+            tooltip: 'toolbar.zoomIn'.tr(),
             iconSize: 14,
             onTap: () {
               final cur = ref.read(pixelsPerSecondProvider);
@@ -209,7 +218,7 @@ class AudioToolBar extends ConsumerWidget {
           ),
           _TbBtn(
             icon: Icons.zoom_out_outlined,
-            tooltip: 'Zoom Out',
+            tooltip: 'toolbar.zoomOut'.tr(),
             iconSize: 14,
             onTap: () {
               final cur = ref.read(pixelsPerSecondProvider);
@@ -220,7 +229,7 @@ class AudioToolBar extends ConsumerWidget {
           if (isMobile)
             _TbBtn(
               icon: Icons.menu,
-              tooltip: 'Menu',
+              tooltip: 'toolbar.menu'.tr(),
               iconSize: 16,
               onTap: () => _showMobileMenu(context, ref),
             ),
