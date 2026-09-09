@@ -51,8 +51,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
     // track whose notes/params changed and hot-swap its WAV so the newly
     // drawn notes are heard immediately.
     List<Track> lastTracks = ref.read(projectProvider).tracks;
-    ref.listen(projectProvider, (_, next) {
-      final prev = lastTracks;
+    ref.listen(projectProvider, (_, next) {      final prev = lastTracks;
       lastTracks = next.tracks;
       final wasPlaying = state == PlaybackState.playing && audio.isPlaying;
       if (!wasPlaying || prev == null) return;
@@ -76,6 +75,15 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
         _pendingSwap[t.id] = t;
         _scheduleHotSwap(t.id);
       }
+    });
+
+    // Cancel pending hot-swap timers when the notifier goes away.
+    ref.onDispose(() {
+      for (final t in _swapTimers.values) {
+        t.cancel();
+      }
+      _swapTimers.clear();
+      _pendingSwap.clear();
     });
 
     return PlaybackState.stopped;

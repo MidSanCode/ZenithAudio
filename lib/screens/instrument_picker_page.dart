@@ -292,7 +292,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text('Select Instrument'),
+        title: Text('instrumentPicker.title'.tr()),
         actions: [
           IconButton(
             icon: const Icon(Icons.library_music, size: 20),

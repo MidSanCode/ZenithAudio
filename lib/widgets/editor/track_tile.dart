@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
@@ -110,7 +111,7 @@ class TrackTile extends ConsumerWidget {
       final settings = ref.read(settingsProvider);
       if (settings.editorMode == 'float') {
         ref.read(floatingWindowProvider.notifier).open(
-          title: 'Piano Roll: ${track.name}',
+          title: 'track.context.pianoRollTitle'.tr(namedArgs: {'name': track.name}),
           builder: (_) => PianoRollEditor(trackId: track.id, isFloating: true),
         );
       } else {
@@ -124,7 +125,7 @@ class TrackTile extends ConsumerWidget {
       final settings = ref.read(settingsProvider);
       if (settings.editorMode == 'float') {
         ref.read(floatingWindowProvider.notifier).open(
-          title: 'Audio: ${track.name}',
+          title: 'track.context.audioTitle'.tr(namedArgs: {'name': track.name}),
           builder: (_) => AudioClipEditor(trackId: track.id, isFloating: true),
         );
       } else {
@@ -139,17 +140,17 @@ class TrackTile extends ConsumerWidget {
     final globalPos = renderBox.localToGlobal(localPos);
 
     final items = <PopupMenuEntry<String>>[
-      const PopupMenuItem(value: 'rename', child: Text('重命名')),
-      const PopupMenuItem(value: 'properties', child: Text('属性')),
+      PopupMenuItem(value: 'rename', child: Text('track.context.rename'.tr())),
+      PopupMenuItem(value: 'properties', child: Text('track.context.properties'.tr())),
     ];
     if (track.isInstrument) {
-      items.add(const PopupMenuItem(value: 'editPianoRoll', child: Text('编辑钢琴卷帘')));
-      items.add(const PopupMenuItem(value: 'changeInstrument', child: Text('更换乐器')));
+      items.add(PopupMenuItem(value: 'editPianoRoll', child: Text('track.context.editPianoRoll'.tr())));
+      items.add(PopupMenuItem(value: 'changeInstrument', child: Text('track.context.changeInstrument'.tr())));
       final synthPreset = track.instrumentName == null
           ? null
           : InstrumentPreset.fromIdOrNull(track.instrumentName!);
       if (synthPreset != null && SynthEditorLauncher.isEditable(synthPreset)) {
-        items.add(const PopupMenuItem(value: 'editSynth', child: Text('合成器编辑')));
+        items.add(PopupMenuItem(value: 'editSynth', child: Text('track.context.editSynth'.tr())));
       }
       items.add(PopupMenuItem(
           value: 'compressor',
@@ -159,12 +160,14 @@ class TrackTile extends ConsumerWidget {
                 : Icons.compress_outlined,
                 size: 16),
             const SizedBox(width: 8),
-            Text(track.compressor?.enabled == true ? '压缩器 ✓' : '压缩器'),
+            Text(track.compressor?.enabled == true
+                ? 'compressor.menuOn'.tr()
+                : 'compressor.menu'.tr()),
           ])));
     } else if (track.type == TrackType.audio) {
-      items.add(const PopupMenuItem(value: 'editAudio', child: Text('编辑音频')));
+      items.add(PopupMenuItem(value: 'editAudio', child: Text('track.context.editAudio'.tr())));
     }
-    items.add(const PopupMenuItem(value: 'delete', child: Text('删除')));
+    items.add(PopupMenuItem(value: 'delete', child: Text('common.delete'.tr())));
 
     showMenu<String>(
       context: context,
@@ -181,7 +184,7 @@ class TrackTile extends ConsumerWidget {
         case 'editPianoRoll':
           if (settings.editorMode == 'float') {
             ref.read(floatingWindowProvider.notifier).open(
-              title: 'Piano Roll: ${track.name}',
+              title: 'track.context.pianoRollTitle'.tr(namedArgs: {'name': track.name}),
               builder: (_) => PianoRollEditor(trackId: track.id, isFloating: true),
             );
           } else {
@@ -194,7 +197,7 @@ class TrackTile extends ConsumerWidget {
         case 'editAudio':
           if (settings.editorMode == 'float') {
             ref.read(floatingWindowProvider.notifier).open(
-              title: 'Audio: ${track.name}',
+              title: 'track.context.audioTitle'.tr(namedArgs: {'name': track.name}),
               builder: (_) => AudioClipEditor(trackId: track.id, isFloating: true),
             );
           } else {
@@ -217,19 +220,19 @@ class TrackTile extends ConsumerWidget {
     final newName = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('重命名音轨'),
+        title: Text('track.context.renameTitle'.tr()),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '音轨名称'),
+          decoration: InputDecoration(labelText: 'track.context.nameLabel'.tr()),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('取消')),
+              child: Text('common.cancel'.tr())),
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(controller.text),
-              child: const Text('确定')),
+              child: Text('common.confirm'.tr())),
         ],
       ),
     );
@@ -255,31 +258,38 @@ class TrackTile extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('音轨属性'),
+        title: Text('track.context.propertiesTitle'.tr()),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('名称: ${track.name}'),
+            Text('track.context.name'.tr(namedArgs: {'name': track.name})),
             const SizedBox(height: 8),
-            Text('类型: ${track.type == TrackType.audio
-                ? "音频"
-                : (_isSynthPresetTrack ? "合成器" : "乐器")}'),
+            Text('track.context.type'.tr(namedArgs: {
+              'type': track.type == TrackType.audio
+                  ? 'track.type.audio'.tr()
+                  : (_isSynthPresetTrack
+                      ? 'track.type.synth'.tr()
+                      : 'track.type.instrument'.tr()),
+            })),
             if (track.isInstrument && track.instrumentName != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text('乐器: ${track.instrumentName}'),
+                child: Text('track.context.instrument'
+                    .tr(namedArgs: {'name': track.instrumentName!})),
               ),
             const SizedBox(height: 8),
-            Text('音符: ${track.notes.length}'),
+            Text('track.context.notes'
+                .tr(namedArgs: {'n': '${track.notes.length}'})),
             const SizedBox(height: 8),
-            Text('时长: ${_formatDuration(track.duration)}'),
+            Text('track.context.duration'.tr(
+                namedArgs: {'time': _formatDuration(track.duration)})),
           ],
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('确定')),
+              child: Text('common.confirm'.tr())),
         ],
       ),
     );
@@ -289,16 +299,17 @@ class TrackTile extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除音轨'),
-        content: Text('确定删除音轨 "${track.name}" 吗？此操作不可撤销。'),
+        title: Text('track.context.deleteTitle'.tr()),
+        content: Text('track.context.deleteConfirm'
+            .tr(namedArgs: {'name': track.name})),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('取消')),
+              child: Text('common.cancel'.tr())),
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('删除',
-                  style: TextStyle(color: Colors.redAccent))),
+              child: Text('common.delete'.tr(),
+                  style: const TextStyle(color: Colors.redAccent))),
         ],
       ),
     );
@@ -354,10 +365,10 @@ class _CompressorDialogState extends State<_CompressorDialog> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return AlertDialog(
-      title: const Row(children: [
-        Icon(Icons.compress, size: 20),
-        SizedBox(width: 8),
-        Text('轨道压缩器', style: TextStyle(fontSize: 16)),
+      title: Row(children: [
+        const Icon(Icons.compress, size: 20),
+        const SizedBox(width: 8),
+        Text('compressor.title'.tr(), style: const TextStyle(fontSize: 16)),
       ]),
       content: SizedBox(
         width: 340,
@@ -368,32 +379,33 @@ class _CompressorDialogState extends State<_CompressorDialog> {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               dense: true,
-              title: const Text('启用压缩', style: TextStyle(fontSize: 13)),
-              subtitle: const Text('加快衰减、压平动态(渲染时应用)',
-                  style: TextStyle(fontSize: 10)),
+              title: Text('compressor.enable'.tr(),
+                  style: const TextStyle(fontSize: 13)),
+              subtitle: Text('compressor.enableDesc'.tr(),
+                  style: const TextStyle(fontSize: 10)),
               value: _enabled,
               onChanged: (v) => setState(() => _enabled = v),
             ),
             const SizedBox(height: 4),
-            _row('阈值', _formatThreshold(), Slider(
+            _row('compressor.threshold'.tr(), _formatThreshold(), Slider(
               value: _threshold,
               min: 0.05,
               max: 0.95,
               onChanged: (v) => setState(() => _threshold = v),
             )),
-            _row('比率', '${_ratio.toStringAsFixed(1)} : 1', Slider(
+            _row('compressor.ratio'.tr(), '${_ratio.toStringAsFixed(1)} : 1', Slider(
               value: _ratio,
               min: 1,
               max: 20,
               onChanged: (v) => setState(() => _ratio = v),
             )),
-            _row('启动', '${(_attack * 1000).round()} ms', Slider(
+            _row('compressor.attack'.tr(), '${(_attack * 1000).round()} ms', Slider(
               value: _attack,
               min: 0.0005,
               max: 0.05,
               onChanged: (v) => setState(() => _attack = v),
             )),
-            _row('释放', '${(_release * 1000).round()} ms', Slider(
+            _row('compressor.release'.tr(), '${(_release * 1000).round()} ms', Slider(
               value: _release,
               min: 0.01,
               max: 0.5,
@@ -401,7 +413,7 @@ class _CompressorDialogState extends State<_CompressorDialog> {
             )),
             const SizedBox(height: 6),
             Text(
-              '预设:',
+              'compressor.presets'.tr(),
               style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
             ),
             Wrap(
@@ -411,19 +423,22 @@ class _CompressorDialogState extends State<_CompressorDialog> {
                   onPressed: () => setState(() {
                     _enabled = true; _threshold = 0.35; _ratio = 8; _attack = 0.002; _release = 0.05;
                   }),
-                  child: const Text('快速衰减', style: TextStyle(fontSize: 11)),
+                  child: Text('compressor.presetFast'.tr(),
+                      style: const TextStyle(fontSize: 11)),
                 ),
                 OutlinedButton(
                   onPressed: () => setState(() {
                     _enabled = true; _threshold = 0.5; _ratio = 3; _attack = 0.01; _release = 0.12;
                   }),
-                  child: const Text('平滑 glue', style: TextStyle(fontSize: 11)),
+                  child: Text('compressor.presetGlue'.tr(),
+                      style: const TextStyle(fontSize: 11)),
                 ),
                 OutlinedButton(
                   onPressed: () => setState(() {
                     _enabled = true; _threshold = 0.25; _ratio = 12; _attack = 0.001; _release = 0.03;
                   }),
-                  child: const Text('极限压平', style: TextStyle(fontSize: 11)),
+                  child: Text('compressor.presetLimit'.tr(),
+                      style: const TextStyle(fontSize: 11)),
                 ),
               ],
             ),
@@ -436,18 +451,18 @@ class _CompressorDialogState extends State<_CompressorDialog> {
             widget.onApply(const TrackCompressorParams(enabled: false));
             Navigator.pop(context);
           },
-          child: const Text('关闭压缩器'),
+          child: Text('compressor.disable'.tr()),
         ),
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
+          child: Text('common.cancel'.tr()),
         ),
         FilledButton(
           onPressed: () {
             widget.onApply(_params);
             Navigator.pop(context);
           },
-          child: const Text('应用'),
+          child: Text('common.apply'.tr()),
         ),
       ],
     );

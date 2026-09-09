@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import '../../models/track.dart';
 import '../../models/note.dart';
@@ -73,7 +74,7 @@ class PianoRollTrack extends StatelessWidget {
                     Icon(Icons.piano_outlined, size: 12, color: track.color),
                     const SizedBox(width: 4),
                     Text(
-                      '${track.notes.length} notes',
+                      'pianoRoll.notesCount'.tr(namedArgs: {'n': '${track.notes.length}'}),
                       style: TextStyle(fontSize: 9, color: cs.onSurfaceVariant),
                     ),
                   ],

@@ -243,14 +243,14 @@ class AudioToolBar extends ConsumerWidget {
       context: context,
       position: RelativeRect.fromLTRB(999, 34, 999, 34),
       items: [
-        const PopupMenuItem(value: 'new', child: Text('New Project')),
-        const PopupMenuItem(value: 'open', child: Text('Open Project')),
-        const PopupMenuItem(value: 'save', child: Text('Save')),
-        const PopupMenuItem(value: 'import', child: Text('Import Audio')),
-        const PopupMenuItem(value: 'addAudio', child: Text('Add Audio Track')),
-        const PopupMenuItem(value: 'addInst', child: Text('Add Instrument')),
-        const PopupMenuItem(value: 'settings', child: Text('Settings')),
-        const PopupMenuItem(value: 'about', child: Text('About')),
+        PopupMenuItem(value: 'new', child: Text('menu.file.newProject'.tr())),
+        PopupMenuItem(value: 'open', child: Text('menu.file.openProject'.tr())),
+        PopupMenuItem(value: 'save', child: Text('menu.file.saveProject'.tr())),
+        PopupMenuItem(value: 'import', child: Text('menu.track.importAudio'.tr())),
+        PopupMenuItem(value: 'addAudio', child: Text('toolbar.addTrack'.tr())),
+        PopupMenuItem(value: 'addInst', child: Text('menu.track.addInstrument'.tr())),
+        PopupMenuItem(value: 'settings', child: Text('menu.file.settings'.tr())),
+        PopupMenuItem(value: 'about', child: Text('menu.help.about'.tr())),
       ],
     ).then((v) {
       if (v == null) return;
@@ -289,7 +289,7 @@ class AudioToolBar extends ConsumerWidget {
               children: [
                 Icon(Icons.tune, size: 16, color: cs.primary),
                 const SizedBox(width: 8),
-                const Text('Project Settings', style: TextStyle(fontSize: 14)),
+                Text('toolbar.projectSettings'.tr(), style: const TextStyle(fontSize: 14)),
               ],
             ),
             content: SizedBox(
@@ -299,7 +299,7 @@ class AudioToolBar extends ConsumerWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _setLabel('Time Signature', cs),
+                    _setLabel('songInfo.timeSignature'.tr(), cs),
                     const SizedBox(height: 4),
                     DropdownButton<String>(
                       value: '${proj.timeSignatureNumerator}/${proj.timeSignatureDenominator}',
@@ -315,7 +315,7 @@ class AudioToolBar extends ConsumerWidget {
                       },
                     ),
                     const SizedBox(height: 12),
-                    _setLabel('Key Signature', cs),
+                    _setLabel('songInfo.keySignature'.tr(), cs),
                     const SizedBox(height: 4),
                     DropdownButton<String>(
                       value: proj.keySignature,
@@ -359,7 +359,7 @@ class AudioToolBar extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    _setLabel('Playback Speed', cs),
+                    _setLabel('songInfo.playbackSpeed'.tr(), cs),
                     Row(
                       children: [
                         Expanded(
@@ -380,7 +380,7 @@ class AudioToolBar extends ConsumerWidget {
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close', style: TextStyle(fontSize: 12))),
+              TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text('common.close'.tr(), style: const TextStyle(fontSize: 12))),
             ],
           );
         },

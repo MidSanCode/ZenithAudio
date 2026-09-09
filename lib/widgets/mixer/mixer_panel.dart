@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
@@ -72,7 +73,7 @@ class _MixerHeader extends ConsumerWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              '${ref.watch(projectProvider).tracks.length} channels',
+              'mixer.channels'.tr(namedArgs: {'n': '${ref.watch(projectProvider).tracks.length}'}),
               style: TextStyle(color: cs.onSurfaceVariant.withAlpha(153), fontSize: 9),
             ),
             const Spacer(),

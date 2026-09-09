@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
@@ -52,9 +53,9 @@ class SynthEditorLauncher {
     final preset = name == null ? null : InstrumentPreset.fromIdOrNull(name);
     if (preset == null || !isEditable(preset)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('当前音轨的乐器不支持合成器编辑(请先更换为合成器音色)'),
-          duration: Duration(seconds: 3),
+        SnackBar(
+          content: Text('synth.notEditable'.tr()),
+          duration: const Duration(seconds: 3),
         ),
       );
       return;
@@ -70,7 +71,7 @@ class SynthEditorLauncher {
       final notifier = ref.read(floatingWindowProvider.notifier);
       late final String windowId;
       windowId = notifier.open(
-        title: '合成器: ${preset.name}',
+        title: 'synth.editorTitle'.tr(namedArgs: {'name': preset.name}),
         size: const Size(520, 560),
         builder: (_) => SynthEditorPanel(
           preset: preset,
@@ -116,12 +117,12 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
   bool _isPreviewing = false;
 
   static const engines = {
-    'additive': '加法 (Additive)',
-    'subtractive': '减法 (Subtractive)',
-    'wavetable': '波表 (Wavetable)',
-    'fm': 'FM (2-op)',
-    'sample': '采样 (SoundFont)',
-    'granular': '粒子 (Granular)',
+    'additive': 'synth.engine.additive',
+    'subtractive': 'synth.engine.subtractive',
+    'wavetable': 'synth.engine.wavetable',
+    'fm': 'synth.engine.fm',
+    'sample': 'synth.engine.sample',
+    'granular': 'synth.engine.granular',
   };
 
   @override
@@ -196,7 +197,7 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
               const Icon(Icons.tune, size: 16),
               const SizedBox(width: 6),
               Expanded(
-                child: Text('合成器: ${p.name}',
+                child: Text('synth.editorTitle'.tr(namedArgs: {'name': p.name}),
                     style: const TextStyle(fontSize: 13)),
               ),
             ],
@@ -205,53 +206,55 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
         ],
         DropdownButtonFormField<String>(
           initialValue: engine,
-          decoration: const InputDecoration(
-            labelText: '合成引擎',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: 'synth.engine'.tr(),
+            border: const OutlineInputBorder(),
             isDense: true,
           ),
           items: engines.entries
               .map((e) =>
-                  DropdownMenuItem(value: e.key, child: Text(e.value)))
+                  DropdownMenuItem(value: e.key, child: Text(e.value.tr())))
               .toList(),
           onChanged: (v) => _update((d) => d.copyWith(synthEngine: v)),
         ),
         const SizedBox(height: 12),
 
         if (engine == 'subtractive') ...[
-          _slider('滤波器截止', p.filterCutoff, 60, 8000,
+          _slider('synth.filterCutoff'.tr(), p.filterCutoff, 60, 8000,
               (v) => _update((d) => d.copyWith(filterCutoff: v)),
               format: (v) => '${v.round()} Hz'),
-          _slider('共振', p.filterResonance, 0.3, 10,
+          _slider('synth.resonance'.tr(), p.filterResonance, 0.3, 10,
               (v) => _update((d) => d.copyWith(filterResonance: v))),
-          _slider('滤波包络量', p.filterEnvAmount, 0, 10,
+          _slider('synth.filterEnv'.tr(), p.filterEnvAmount, 0, 10,
               (v) => _update((d) => d.copyWith(filterEnvAmount: v))),
-          _slider('滤波衰减', p.filterDecay, 0.02, 2,
+          _slider('synth.filterDecay'.tr(), p.filterDecay, 0.02, 2,
               (v) => _update((d) => d.copyWith(filterDecay: v))),
-          _slider('滤波延音', p.filterSustain, 0, 1,
+          _slider('synth.filterSustain'.tr(), p.filterSustain, 0, 1,
               (v) => _update((d) => d.copyWith(filterSustain: v))),
         ],
         if (engine == 'wavetable')
-          _slider('Morph 周期', p.morphRate, 0, 12,
+          _slider('synth.morphRate'.tr(), p.morphRate, 0, 12,
               (v) => _update((d) => d.copyWith(morphRate: v)),
-              format: (v) => v < 0.05 ? '静止' : '${v.toStringAsFixed(1)}s'),
+              format: (v) =>
+                  v < 0.05 ? 'synth.morphStill'.tr() : '${v.toStringAsFixed(1)}s'),
         if (engine == 'fm') ...[
-          _slider('FM 比率', p.fmRatio, 0.25, 8,
+          _slider('synth.fmRatio'.tr(), p.fmRatio, 0.25, 8,
               (v) => _update((d) => d.copyWith(fmRatio: v)), fraction: 2),
-          _slider('FM 指数', p.fmIndex, 0, 10,
+          _slider('synth.fmIndex'.tr(), p.fmIndex, 0, 10,
               (v) => _update((d) => d.copyWith(fmIndex: v))),
-          _slider('指数衰减', p.fmDecay, 0.05, 3,
+          _slider('synth.fmDecay'.tr(), p.fmDecay, 0.05, 3,
               (v) => _update((d) => d.copyWith(fmDecay: v))),
         ],
         if (engine == 'granular')
-          Text('粒子合成:短音粒 + 随机微失谐 + 窗口化叠加,适合氛围/噪性质感。',
+          Text('synth.granularDesc'.tr(),
               style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
         if (engine == 'sample')
-          Text('采样引擎:program ${p.programNumber}。需先在乐器页加载 .sf2 音色库。',
+          Text('synth.sampleDesc'
+                  .tr(namedArgs: {'n': '${p.programNumber}'}),
               style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
 
         const SizedBox(height: 8),
-        _slider('失谐 (cents)', p.detuneCents, 0, 50,
+        _slider('synth.detune'.tr(), p.detuneCents, 0, 50,
             (v) => _update((d) => d.copyWith(detuneCents: v)),
             fraction: 1),
 
@@ -274,23 +277,26 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
 
         Row(
           children: [
-            Text('包络曲线',
+            Text('synth.envCurve'.tr(),
                 style:
                     TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
             const Spacer(),
             TextButton(
               onPressed: () => _update(
                   (d) => d.copyWith(envCurve: EnvelopeCurve.pluck())),
-              child: const Text('拨弦', style: TextStyle(fontSize: 11)),
+              child: Text('synth.envPluck'.tr(),
+                  style: const TextStyle(fontSize: 11)),
             ),
             TextButton(
               onPressed: () =>
                   _update((d) => d.copyWith(envCurve: EnvelopeCurve.pad())),
-              child: const Text('铺底', style: TextStyle(fontSize: 11)),
+              child: Text('synth.envPad'.tr(),
+                  style: const TextStyle(fontSize: 11)),
             ),
             TextButton(
               onPressed: () => _update((d) => d.copyWith(envCurve: null)),
-              child: const Text('用 ADSR', style: TextStyle(fontSize: 11)),
+              child: Text('synth.envUseAdsr'.tr(),
+                  style: const TextStyle(fontSize: 11)),
             ),
           ],
         ),
@@ -309,7 +315,7 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
               : SizedBox(
                   height: 100,
                   child: Center(
-                    child: Text('未启用曲线包络(使用 ADSR)',
+                    child: Text('synth.envDisabled'.tr(),
                         style:
                             TextStyle(fontSize: 11, color: cs.outline)),
                   ),
@@ -345,17 +351,17 @@ class _SynthEditorPanelState extends State<SynthEditorPanel> {
                 onPressed: _isPreviewing ? null : _preview,
                 icon: Icon(_isPreviewing ? Icons.stop : Icons.play_arrow,
                     size: 16),
-                label: const Text('试听'),
+                label: Text('synth.preview'.tr()),
               ),
               const Spacer(),
               TextButton(
                 onPressed: _cancel,
-                child: const Text('关闭'),
+                child: Text('common.close'.tr()),
               ),
               const SizedBox(width: 4),
               FilledButton(
                 onPressed: _commit,
-                child: const Text('保存'),
+                child: Text('common.save'.tr()),
               ),
             ],
           ),

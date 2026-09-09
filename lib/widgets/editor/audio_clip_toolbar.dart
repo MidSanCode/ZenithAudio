@@ -159,7 +159,9 @@ class _AudioClipToolbarState extends State<AudioClipToolbar> {
                   _toolBtn(
                     context,
                     icon: _effectsExpanded ? Icons.expand_less : Icons.expand_more,
-                    tooltip: _effectsExpanded ? 'audioClip.effects.hide' : 'audioClip.effects.show',
+                    tooltip: _effectsExpanded
+                        ? 'audioClip.effects.hide'.tr()
+                        : 'audioClip.effects.show'.tr(),
                     onTap: () => setState(() => _effectsExpanded = !_effectsExpanded),
                   ),
                 ],

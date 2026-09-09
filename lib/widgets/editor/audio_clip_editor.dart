@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/audio_clip.dart';
 import '../../models/track.dart';
@@ -232,10 +233,10 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
         _clip = AudioClip(samples: samples, sampleRate: widget.initialSampleRate ?? 44100, sourceFile: sourceFile);
         _loadError = null;
       } else {
-        _loadError = '无法读取音频文件（格式不支持或文件损坏）。请使用 WAV 格式。';
+        _loadError = 'audioClip.loadError'.tr();
       }
     } else {
-      _loadError = '音频文件未找到。';
+      _loadError = 'audioClip.fileNotFound'.tr();
     }
 
     _safeSetState(() => _loading = false);
@@ -548,11 +549,12 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
                         children: [
                           Icon(Icons.audio_file_outlined, size: 48, color: cs.onSurfaceVariant),
                           const SizedBox(height: 8),
-                          Text(_loadError ?? 'No audio data', style: TextStyle(color: _loadError != null ? cs.error : cs.onSurfaceVariant)),
+                          Text(_loadError ?? 'audioClip.noAudioData'.tr(),
+                              style: TextStyle(color: _loadError != null ? cs.error : cs.onSurfaceVariant)),
                           const SizedBox(height: 16),
                           FilledButton.icon(
                             icon: const Icon(Icons.add, size: 16),
-                            label: const Text('Generate Waveform'),
+                            label: Text('audioClip.generateWaveform'.tr()),
                             onPressed: () => _safeSetState(() => _showGenerator = !_showGenerator),
                           ),
                         ],
@@ -610,7 +612,10 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           ),
           const SizedBox(width: 8),
           Text(
-            _track?.name ?? (widget.initialGenType != null ? 'New ${widget.initialGenType}' : 'Audio Editor'),
+            _track?.name ??
+                (widget.initialGenType != null
+                    ? 'audioClip.newGenerated'.tr(namedArgs: {'type': widget.initialGenType!})
+                    : 'audioClip.audioEditor'.tr()),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14),
@@ -619,7 +624,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           if (_clip == null && _loadError != null)
             TextButton.icon(
               icon: const Icon(Icons.add, size: 14),
-              label: const Text('Generate Waveform', style: TextStyle(fontSize: 11)),
+              label: Text('audioClip.generateWaveform'.tr(), style: const TextStyle(fontSize: 11)),
               onPressed: () => _safeSetState(() => _showGenerator = !_showGenerator),
               style: TextButton.styleFrom(
                 visualDensity: VisualDensity.compact,
@@ -778,7 +783,10 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
 
   Widget _buildTransportBar(ColorScheme cs) {
     final selText = _clip?.selection != null && _clip!.selection!.isValid
-        ? 'Sel: ${_clip!.selection!.startSec.toStringAsFixed(1)}–${_clip!.selection!.endSec.toStringAsFixed(1)}s'
+        ? 'audioClip.selection'.tr(namedArgs: {
+            'start': _clip!.selection!.startSec.toStringAsFixed(1),
+            'end': _clip!.selection!.endSec.toStringAsFixed(1),
+          })
         : '';
     return Container(
       height: 48,
@@ -823,7 +831,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           if (_clip?.selection != null)
             TextButton.icon(
               icon: const Icon(Icons.close, size: 14),
-              label: const Text('Clear', style: TextStyle(fontSize: 10)),
+              label: Text('audioClip.clear'.tr(), style: const TextStyle(fontSize: 10)),
               onPressed: _clearSelection,
               style: TextButton.styleFrom(
                 visualDensity: VisualDensity.compact,
@@ -852,22 +860,22 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
         children: [
           Row(
             children: [
-              Text('Drop Settings — ${data.type}',
+              Text('audioClip.dropSettings'.tr(namedArgs: {'type': data.type}),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurface)),
               const Spacer(),
-              Text('Mix: ${(_dropMixLevel * 100).round()}%',
+              Text('audioClip.mixPercent'.tr(namedArgs: {'p': '${(_dropMixLevel * 100).round()}'}),
                   style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
             ],
           ),
           const SizedBox(height: 6),
           if (!data.isNoiseType)
-            _buildDropSlider('Frequency', _dropFrequency, 20, 20000, true,
+            _buildDropSlider('audioClip.frequency'.tr(), _dropFrequency, 20, 20000, true,
                 '${_dropFrequency.round()} Hz', (v) => _dropFrequency = v),
-          _buildDropSlider('Duration', _dropDuration, 0.1, 30, false,
+          _buildDropSlider('audioClip.duration'.tr(), _dropDuration, 0.1, 30, false,
               '${_dropDuration.toStringAsFixed(1)}s', (v) => _dropDuration = v),
-          _buildDropSlider('Amplitude', _dropAmplitude, 0, 1, false,
+          _buildDropSlider('audioClip.amplitude'.tr(), _dropAmplitude, 0, 1, false,
               '${(_dropAmplitude * 100).round()}%', (v) => _dropAmplitude = v),
-          _buildDropSlider('Mix Level', _dropMixLevel, 0, 1, false,
+          _buildDropSlider('audioClip.mixLevel'.tr(), _dropMixLevel, 0, 1, false,
               '${(_dropMixLevel * 100).round()}%', (v) => _dropMixLevel = v),
           const SizedBox(height: 4),
           Row(
@@ -875,14 +883,14 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
             children: [
               TextButton.icon(
                 icon: const Icon(Icons.close, size: 14),
-                label: const Text('Cancel', style: TextStyle(fontSize: 11)),
+                label: Text('common.cancel'.tr(), style: const TextStyle(fontSize: 11)),
                 onPressed: _cancelDropSettings,
                 style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
               ),
               const SizedBox(width: 8),
               FilledButton.icon(
                 icon: const Icon(Icons.check, size: 14),
-                label: const Text('Apply', style: TextStyle(fontSize: 11)),
+                label: Text('common.apply'.tr(), style: const TextStyle(fontSize: 11)),
                 onPressed: _applyDropSettings,
                 style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
               ),
@@ -972,7 +980,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
       case 'compressor':
         return showEffectDialog(
           context: context,
-          title: 'Compressor / Expander',
+          title: 'audioClip.dialog.compressor'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'threshold': -20, 'ratio': 4, 'knee': 6, 'attackMs': 5, 'releaseMs': 100, 'makeupGain': 0},
@@ -983,19 +991,19 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Threshold', paramKey: 'threshold', params: params, onChanged: onChanged, min: -60, max: 0, display: (v) => '${v.round()} dB', defaultValue: -20),
-              effectSlider(label: 'Ratio', paramKey: 'ratio', params: params, onChanged: onChanged, min: 1, max: 20, display: (v) => '${v.toStringAsFixed(1)}:1', defaultValue: 4),
-              effectSlider(label: 'Knee', paramKey: 'knee', params: params, onChanged: onChanged, min: 0, max: 20, display: (v) => '${v.round()} dB', defaultValue: 6),
-              effectSlider(label: 'Attack', paramKey: 'attackMs', params: params, onChanged: onChanged, min: 0.1, max: 100, display: (v) => '${v.round()} ms', defaultValue: 5),
-              effectSlider(label: 'Release', paramKey: 'releaseMs', params: params, onChanged: onChanged, min: 10, max: 1000, display: (v) => '${v.round()} ms', defaultValue: 100),
-              effectSlider(label: 'Makeup', paramKey: 'makeupGain', params: params, onChanged: onChanged, min: -12, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
+              effectSlider(label: 'audioClip.param.threshold'.tr(), paramKey: 'threshold', params: params, onChanged: onChanged, min: -60, max: 0, display: (v) => '${v.round()} dB', defaultValue: -20),
+              effectSlider(label: 'audioClip.param.ratio'.tr(), paramKey: 'ratio', params: params, onChanged: onChanged, min: 1, max: 20, display: (v) => '${v.toStringAsFixed(1)}:1', defaultValue: 4),
+              effectSlider(label: 'audioClip.param.knee'.tr(), paramKey: 'knee', params: params, onChanged: onChanged, min: 0, max: 20, display: (v) => '${v.round()} dB', defaultValue: 6),
+              effectSlider(label: 'audioClip.param.attack'.tr(), paramKey: 'attackMs', params: params, onChanged: onChanged, min: 0.1, max: 100, display: (v) => '${v.round()} ms', defaultValue: 5),
+              effectSlider(label: 'audioClip.param.release'.tr(), paramKey: 'releaseMs', params: params, onChanged: onChanged, min: 10, max: 1000, display: (v) => '${v.round()} ms', defaultValue: 100),
+              effectSlider(label: 'audioClip.param.makeup'.tr(), paramKey: 'makeupGain', params: params, onChanged: onChanged, min: -12, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
             ],
           ),
         );
       case 'echo':
         return showEffectDialog(
           context: context,
-          title: 'Echo',
+          title: 'audioClip.dialog.echo'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'delay1': 0.3, 'delay2': 0.5, 'delay3': 0.7, 'gain': 0.4, 'mix': 0.5},
@@ -1007,18 +1015,18 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Delay 1', paramKey: 'delay1', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.3),
-              effectSlider(label: 'Delay 2', paramKey: 'delay2', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.5),
-              effectSlider(label: 'Delay 3', paramKey: 'delay3', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.7),
-              effectSlider(label: 'Gain', paramKey: 'gain', params: params, onChanged: onChanged, min: 0, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.4),
-              effectSlider(label: 'Mix', paramKey: 'mix', params: params, onChanged: onChanged, min: 0, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.param.delay1'.tr(), paramKey: 'delay1', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.3),
+              effectSlider(label: 'audioClip.param.delay2'.tr(), paramKey: 'delay2', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.param.delay3'.tr(), paramKey: 'delay3', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.7),
+              effectSlider(label: 'audioClip.param.gain'.tr(), paramKey: 'gain', params: params, onChanged: onChanged, min: 0, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.4),
+              effectSlider(label: 'audioClip.param.mix'.tr(), paramKey: 'mix', params: params, onChanged: onChanged, min: 0, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.5),
             ],
           ),
         );
       case 'reverb':
         return showEffectDialog(
           context: context,
-          title: 'Reverb',
+          title: 'audioClip.dialog.reverb'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'roomSize': 0.6, 'damping': 0.3, 'predelayMs': 30, 'mix': 0.3},
@@ -1028,17 +1036,17 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Room Size', paramKey: 'roomSize', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.6),
-              effectSlider(label: 'Damping', paramKey: 'damping', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
-              effectSlider(label: 'Predelay', paramKey: 'predelayMs', params: params, onChanged: onChanged, min: 0, max: 200, display: (v) => '${v.round()} ms', defaultValue: 30),
-              effectSlider(label: 'Mix', paramKey: 'mix', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
+              effectSlider(label: 'audioClip.param.roomSize'.tr(), paramKey: 'roomSize', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.6),
+              effectSlider(label: 'audioClip.param.damping'.tr(), paramKey: 'damping', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
+              effectSlider(label: 'audioClip.param.predelay'.tr(), paramKey: 'predelayMs', params: params, onChanged: onChanged, min: 0, max: 200, display: (v) => '${v.round()} ms', defaultValue: 30),
+              effectSlider(label: 'audioClip.param.mix'.tr(), paramKey: 'mix', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
             ],
           ),
         );
       case 'delay':
         return showEffectDialog(
           context: context,
-          title: 'Delay',
+          title: 'audioClip.dialog.delay'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'delayTime': 0.3, 'feedback': 0.4, 'mix': 0.5},
@@ -1048,16 +1056,16 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Delay', paramKey: 'delayTime', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.3),
-              effectSlider(label: 'Feedback', paramKey: 'feedback', params: params, onChanged: onChanged, min: 0, max: 0.99, display: (v) => '${(v * 100).round()}%', defaultValue: 0.4),
-              effectSlider(label: 'Mix', paramKey: 'mix', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.param.delay'.tr(), paramKey: 'delayTime', params: params, onChanged: onChanged, min: 0.05, max: 2, display: (v) => '${v.toStringAsFixed(2)}s', defaultValue: 0.3),
+              effectSlider(label: 'audioClip.param.feedback'.tr(), paramKey: 'feedback', params: params, onChanged: onChanged, min: 0, max: 0.99, display: (v) => '${(v * 100).round()}%', defaultValue: 0.4),
+              effectSlider(label: 'audioClip.param.mix'.tr(), paramKey: 'mix', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0.5),
             ],
           ),
         );
       case 'equalizer':
         return showEffectDialog(
           context: context,
-          title: 'Equalizer',
+          title: 'audioClip.dialog.equalizer'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'freq1': 80, 'gain1': 0, 'q1': 1, 'freq2': 1000, 'gain2': 0, 'q2': 1, 'freq3': 5000, 'gain3': 0, 'q3': 1},
@@ -1071,19 +1079,19 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('Band 1 (Low)', style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              effectSlider(label: 'Freq', paramKey: 'freq1', params: params, onChanged: onChanged, min: 20, max: 500, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 80),
-              effectSlider(label: 'Gain', paramKey: 'gain1', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
+              Text('audioClip.param.band1'.tr(), style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              effectSlider(label: 'audioClip.param.freq'.tr(), paramKey: 'freq1', params: params, onChanged: onChanged, min: 20, max: 500, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 80),
+              effectSlider(label: 'audioClip.param.gain'.tr(), paramKey: 'gain1', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
               effectSlider(label: 'Q', paramKey: 'q1', params: params, onChanged: onChanged, min: 0.1, max: 10, display: (v) => v.toStringAsFixed(1), defaultValue: 1),
               const SizedBox(height: 8),
-              Text('Band 2 (Mid)', style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              effectSlider(label: 'Freq', paramKey: 'freq2', params: params, onChanged: onChanged, min: 200, max: 8000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 1000),
-              effectSlider(label: 'Gain', paramKey: 'gain2', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
+              Text('audioClip.param.band2'.tr(), style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              effectSlider(label: 'audioClip.param.freq'.tr(), paramKey: 'freq2', params: params, onChanged: onChanged, min: 200, max: 8000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 1000),
+              effectSlider(label: 'audioClip.param.gain'.tr(), paramKey: 'gain2', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
               effectSlider(label: 'Q', paramKey: 'q2', params: params, onChanged: onChanged, min: 0.1, max: 10, display: (v) => v.toStringAsFixed(1), defaultValue: 1),
               const SizedBox(height: 8),
-              Text('Band 3 (High)', style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
-              effectSlider(label: 'Freq', paramKey: 'freq3', params: params, onChanged: onChanged, min: 1000, max: 20000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 5000),
-              effectSlider(label: 'Gain', paramKey: 'gain3', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
+              Text('audioClip.param.band3'.tr(), style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              effectSlider(label: 'audioClip.param.freq'.tr(), paramKey: 'freq3', params: params, onChanged: onChanged, min: 1000, max: 20000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 5000),
+              effectSlider(label: 'audioClip.param.gain'.tr(), paramKey: 'gain3', params: params, onChanged: onChanged, min: -24, max: 24, display: (v) => '${v.round()} dB', defaultValue: 0),
               effectSlider(label: 'Q', paramKey: 'q3', params: params, onChanged: onChanged, min: 0.1, max: 10, display: (v) => v.toStringAsFixed(1), defaultValue: 1),
             ],
           ),
@@ -1091,7 +1099,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
       case 'pitchShift':
         return showEffectDialog(
           context: context,
-          title: 'Pitch Shifter',
+          title: 'audioClip.dialog.pitchShift'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'semitones': 0},
@@ -1099,15 +1107,15 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Semitones', paramKey: 'semitones', params: params, onChanged: onChanged, min: -12, max: 12, display: (v) => '${v >= 0 ? "+" : ""}${v.toStringAsFixed(1)}', defaultValue: 0),
-              Text('Tip: -12 = octave down, +12 = octave up', style: TextStyle(fontSize: 9, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              effectSlider(label: 'audioClip.param.semitones'.tr(), paramKey: 'semitones', params: params, onChanged: onChanged, min: -12, max: 12, display: (v) => '${v >= 0 ? "+" : ""}${v.toStringAsFixed(1)}', defaultValue: 0),
+              Text('audioClip.param.semitoneTip'.tr(), style: TextStyle(fontSize: 9, color: Theme.of(context).colorScheme.onSurfaceVariant)),
             ],
           ),
         );
       case 'doppler':
         return showEffectDialog(
           context: context,
-          title: 'Doppler (Dynamic Pitch)',
+          title: 'audioClip.dialog.doppler'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'depth': 0.5, 'rate': 0.5},
@@ -1115,15 +1123,15 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Depth', paramKey: 'depth', params: params, onChanged: onChanged, min: 0, max: 6, display: (v) => '${v.toStringAsFixed(1)} st', defaultValue: 0.5),
-              effectSlider(label: 'Rate', paramKey: 'rate', params: params, onChanged: onChanged, min: 0.1, max: 10, display: (v) => '${v.toStringAsFixed(1)} Hz', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.param.depth'.tr(), paramKey: 'depth', params: params, onChanged: onChanged, min: 0, max: 6, display: (v) => '${v.toStringAsFixed(1)} st', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.param.rate'.tr(), paramKey: 'rate', params: params, onChanged: onChanged, min: 0.1, max: 10, display: (v) => '${v.toStringAsFixed(1)} Hz', defaultValue: 0.5),
             ],
           ),
         );
       case 'fadeIn':
         return showEffectDialog(
           context: context,
-          title: 'Fade In',
+          title: 'audioClip.dialog.fadeIn'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'duration': 0.5},
@@ -1131,14 +1139,14 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Duration', paramKey: 'duration', params: params, onChanged: onChanged, min: 0.05, max: 10, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.duration'.tr(), paramKey: 'duration', params: params, onChanged: onChanged, min: 0.05, max: 10, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 0.5),
             ],
           ),
         );
       case 'fadeOut':
         return showEffectDialog(
           context: context,
-          title: 'Fade Out',
+          title: 'audioClip.dialog.fadeOut'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'duration': 0.5},
@@ -1146,14 +1154,14 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Duration', paramKey: 'duration', params: params, onChanged: onChanged, min: 0.05, max: 10, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 0.5),
+              effectSlider(label: 'audioClip.duration'.tr(), paramKey: 'duration', params: params, onChanged: onChanged, min: 0.05, max: 10, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 0.5),
             ],
           ),
         );
       case 'distort':
         return showEffectDialog(
           context: context,
-          title: 'Distortion',
+          title: 'audioClip.dialog.distort'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'threshold': 0.3},
@@ -1161,14 +1169,14 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Threshold', paramKey: 'threshold', params: params, onChanged: onChanged, min: 0.01, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
+              effectSlider(label: 'audioClip.param.threshold'.tr(), paramKey: 'threshold', params: params, onChanged: onChanged, min: 0.01, max: 1, display: (v) => '${(v * 100).round()}%', defaultValue: 0.3),
             ],
           ),
         );
       case 'amplitudeMap':
         return showEffectDialog(
           context: context,
-          title: 'Amplitude Mapping',
+          title: 'audioClip.dialog.amplitudeMap'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'drive': 1.0},
@@ -1189,14 +1197,14 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Drive', paramKey: 'drive', params: params, onChanged: onChanged, min: 0.1, max: 5, display: (v) => v.toStringAsFixed(1), defaultValue: 1.0),
+              effectSlider(label: 'audioClip.param.drive'.tr(), paramKey: 'drive', params: params, onChanged: onChanged, min: 0.1, max: 5, display: (v) => v.toStringAsFixed(1), defaultValue: 1.0),
             ],
           ),
         );
       case 'mechanize':
         return showEffectDialog(
           context: context,
-          title: 'Mechanization',
+          title: 'audioClip.dialog.mechanize'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'sampleRateReduce': 0.1, 'bitDepth': 8},
@@ -1206,15 +1214,15 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Rate Reduce', paramKey: 'sampleRateReduce', params: params, onChanged: onChanged, min: 0.01, max: 0.5, display: (v) => '${(v * 100).round()}%', defaultValue: 0.1),
-              effectSlider(label: 'Bit Depth', paramKey: 'bitDepth', params: params, onChanged: onChanged, min: 2, max: 16, divisions: 14, display: (v) => '${v.round()} bit', defaultValue: 8),
+              effectSlider(label: 'audioClip.param.rateReduce'.tr(), paramKey: 'sampleRateReduce', params: params, onChanged: onChanged, min: 0.01, max: 0.5, display: (v) => '${(v * 100).round()}%', defaultValue: 0.1),
+              effectSlider(label: 'audioClip.param.bitDepth'.tr(), paramKey: 'bitDepth', params: params, onChanged: onChanged, min: 2, max: 16, divisions: 14, display: (v) => '${v.round()} bit', defaultValue: 8),
             ],
           ),
         );
       case 'spectrumFilter':
         return showEffectDialog(
           context: context,
-          title: 'Spectrum Filter',
+          title: 'audioClip.dialog.spectrumFilter'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'lowCut': 0, 'highCut': 1, 'amount': 1},
@@ -1233,16 +1241,16 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Low Cut', paramKey: 'lowCut', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0),
-              effectSlider(label: 'High Cut', paramKey: 'highCut', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 1),
-              effectSlider(label: 'Amount', paramKey: 'amount', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 1),
+              effectSlider(label: 'audioClip.param.lowCut'.tr(), paramKey: 'lowCut', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 0),
+              effectSlider(label: 'audioClip.param.highCut'.tr(), paramKey: 'highCut', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 1),
+              effectSlider(label: 'audioClip.param.amount'.tr(), paramKey: 'amount', params: params, onChanged: onChanged, display: (v) => '${(v * 100).round()}%', defaultValue: 1),
             ],
           ),
         );
       case 'splitByFreq':
         return showEffectDialog(
           context: context,
-          title: 'Channel Split (Freq)',
+          title: 'audioClip.dialog.splitByFreq'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'lowFreq': 200, 'midFreq': 2000},
@@ -1265,15 +1273,15 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Low-Mid Cross', paramKey: 'lowFreq', params: params, onChanged: onChanged, min: 20, max: 2000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 200),
-              effectSlider(label: 'Mid-High Cross', paramKey: 'midFreq', params: params, onChanged: onChanged, min: 200, max: 20000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 2000),
+              effectSlider(label: 'audioClip.param.lowMidCross'.tr(), paramKey: 'lowFreq', params: params, onChanged: onChanged, min: 20, max: 2000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 200),
+              effectSlider(label: 'audioClip.param.midHighCross'.tr(), paramKey: 'midFreq', params: params, onChanged: onChanged, min: 200, max: 20000, logarithmic: true, display: (v) => '${v.round()} Hz', defaultValue: 2000),
             ],
           ),
         );
       case 'splitByTime':
         return showEffectDialog(
           context: context,
-          title: 'Channel Split (Time)',
+          title: 'audioClip.dialog.splitByTime'.tr(),
           clipSamples: _clip!.samples,
           sampleRate: _clip!.sampleRate,
           initialParams: {'split1': 1.0, 'split2': 3.0},
@@ -1294,8 +1302,8 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
           builder: (ctx, params, onChanged) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              effectSlider(label: 'Split 1', paramKey: 'split1', params: params, onChanged: onChanged, min: 0.1, max: 30, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 1.0),
-              effectSlider(label: 'Split 2', paramKey: 'split2', params: params, onChanged: onChanged, min: 0.1, max: 30, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 3.0),
+              effectSlider(label: 'audioClip.param.split1'.tr(), paramKey: 'split1', params: params, onChanged: onChanged, min: 0.1, max: 30, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 1.0),
+              effectSlider(label: 'audioClip.param.split2'.tr(), paramKey: 'split2', params: params, onChanged: onChanged, min: 0.1, max: 30, display: (v) => '${v.toStringAsFixed(1)}s', defaultValue: 3.0),
             ],
           ),
         );
@@ -1303,7 +1311,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
         // Multi-channel mixer is a special case that needs multiple tracks
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Multi-Channel Mixer: open the Channel Split tools first, then merge channels.')),
+            SnackBar(content: Text('audioClip.mixerHint'.tr())),
           );
         }
         return null;
@@ -1329,7 +1337,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Split into ${results.length} bands')),
+        SnackBar(content: Text('audioClip.splitIntoBands'.tr(namedArgs: {'n': '${results.length}'}))),
       );
     }
   }

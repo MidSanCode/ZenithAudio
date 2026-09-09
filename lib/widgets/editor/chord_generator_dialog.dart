@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/note.dart';
@@ -54,7 +55,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
     _keyRoot = idx < 0 ? 0 : idx;
   }
 
-  String get _modeLabel => _mode == 'major' ? '大调' : '小调';
+  String get _modeLabel => _mode == 'major' ? 'chord.major'.tr() : 'chord.minor'.tr();
 
   double _snap(double sec) {
     if (!widget.snapToGrid) return sec;
@@ -90,7 +91,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
         children: [
           const Icon(Icons.library_music, size: 20),
           const SizedBox(width: 8),
-          const Expanded(child: Text('自动和弦生成', style: TextStyle(fontSize: 16))),
+          Expanded(child: Text('chord.title'.tr(), style: const TextStyle(fontSize: 16))),
         ],
       ),
       content: SizedBox(
@@ -103,7 +104,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               // Key + mode
               Row(
                 children: [
-                  const Text('调性', style: TextStyle(fontSize: 12)),
+                  Text('chord.key'.tr(), style: const TextStyle(fontSize: 12)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: DropdownButtonFormField<int>(
@@ -121,9 +122,9 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
                   ),
                   const SizedBox(width: 8),
                   SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'major', label: Text('大调')),
-                      ButtonSegment(value: 'minor', label: Text('小调')),
+                    segments: [
+                      ButtonSegment(value: 'major', label: Text('chord.major'.tr())),
+                      ButtonSegment(value: 'minor', label: Text('chord.minor'.tr())),
                     ],
                     selected: {_mode},
                     onSelectionChanged: (s) => setState(() => _mode = s.first),
@@ -135,9 +136,9 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               // Progression
               DropdownButtonFormField<String>(
                 initialValue: _progression,
-                decoration: const InputDecoration(
-                  labelText: '和弦进行',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: 'chord.progression'.tr(),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
                 items: ChordService.progressionIds
@@ -153,18 +154,18 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               // Pattern
               DropdownButtonFormField<String>(
                 initialValue: _pattern,
-                decoration: const InputDecoration(
-                  labelText: '演奏型态',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: 'chord.pattern'.tr(),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
-                items: const [
-                  DropdownMenuItem(value: 'block', child: Text('柱式(整拍齐奏)')),
-                  DropdownMenuItem(value: 'arpUp', child: Text('上行琶音')),
-                  DropdownMenuItem(value: 'arpDown', child: Text('下行琶音')),
-                  DropdownMenuItem(value: 'alberti', child: Text('阿尔贝蒂低音')),
-                  DropdownMenuItem(value: 'strum', child: Text('扫弦(微错开)')),
-                  DropdownMenuItem(value: 'bassChord', child: Text('贝斯+和弦')),
+                items: [
+                  DropdownMenuItem(value: 'block', child: Text('chord.pattern.block'.tr())),
+                  DropdownMenuItem(value: 'arpUp', child: Text('chord.pattern.arpUp'.tr())),
+                  DropdownMenuItem(value: 'arpDown', child: Text('chord.pattern.arpDown'.tr())),
+                  DropdownMenuItem(value: 'alberti', child: Text('chord.pattern.alberti'.tr())),
+                  DropdownMenuItem(value: 'strum', child: Text('chord.pattern.strum'.tr())),
+                  DropdownMenuItem(value: 'bassChord', child: Text('chord.pattern.bassChord'.tr())),
                 ],
                 onChanged: (v) => setState(() => _pattern = v ?? 'block'),
               ),
@@ -173,7 +174,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               // Octave / beats / repeat
               Row(
                 children: [
-                  const Text('八度', style: TextStyle(fontSize: 12)),
+                  Text('chord.octave'.tr(), style: const TextStyle(fontSize: 12)),
                   Expanded(
                     child: Slider(
                       value: _octave.toDouble(),
@@ -184,7 +185,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
                       onChanged: (v) => setState(() => _octave = v.round()),
                     ),
                   ),
-                  const Text('每和弦拍数', style: TextStyle(fontSize: 12)),
+                  Text('chord.beatsPerChord'.tr(), style: const TextStyle(fontSize: 12)),
                   Expanded(
                     child: Slider(
                       value: _beatsPerChord,
@@ -200,7 +201,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               ),
               Row(
                 children: [
-                  const Text('重复次数', style: TextStyle(fontSize: 12)),
+                  Text('chord.repeat'.tr(), style: const TextStyle(fontSize: 12)),
                   Expanded(
                     child: Slider(
                       value: _repeat.toDouble(),
@@ -216,7 +217,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
                     onChanged: (v) =>
                         setState(() => _replaceExisting = v ?? false),
                   ),
-                  const Text('替换原有音符', style: TextStyle(fontSize: 12)),
+                  Text('chord.replaceExisting'.tr(), style: const TextStyle(fontSize: 12)),
                 ],
               ),
 
@@ -247,8 +248,11 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                '将插入 ${notes.length} 个音符,总长 ${endSec.toStringAsFixed(1)}s'
-                '(起始 ${_snap(widget.insertSec).toStringAsFixed(2)}s)',
+                'chord.insertSummary'.tr(namedArgs: {
+                  'n': '${notes.length}',
+                  'duration': endSec.toStringAsFixed(1),
+                  'start': _snap(widget.insertSec).toStringAsFixed(2),
+                }),
                 style: TextStyle(
                     fontSize: 11,
                     color: cs.onSurfaceVariant,
@@ -261,7 +265,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
+          child: Text('common.cancel'.tr()),
         ),
         FilledButton.icon(
           onPressed: notes.isEmpty
@@ -271,7 +275,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
                   Navigator.pop(context, _replaceExisting);
                 },
           icon: const Icon(Icons.add, size: 16),
-          label: const Text('插入'),
+          label: Text('chord.insert'.tr()),
         ),
       ],
     );
@@ -280,21 +284,21 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
   String _progressionLabel(String id) {
     switch (id) {
       case 'pop':
-        return '流行 1-5-6-4 ($_modeLabel)';
+        return 'chord.progression.pop'.tr(namedArgs: {'mode': _modeLabel});
       case 'sensitive':
-        return '卡农进行 6-4-1-5';
+        return 'chord.progression.sensitive'.tr();
       case '50s':
-        return '50年代 1-6-4-5';
+        return 'chord.progression.50s'.tr();
       case 'canon':
-        return '八和弦 1-5-6-3-4-1-4-5';
+        return 'chord.progression.canon'.tr();
       case 'jazz':
-        return '爵士 2-5-1';
+        return 'chord.progression.jazz'.tr();
       case 'sad_lofi':
-        return 'Lo-fi 1m-4m-6m-5';
+        return 'chord.progression.sadLofi'.tr();
       case 'minor_pop':
-        return '小调流行 1m-6-3-7';
+        return 'chord.progression.minorPop'.tr();
       case 'blues':
-        return '布鲁斯 12小节';
+        return 'chord.progression.blues'.tr();
       default:
         return id;
     }

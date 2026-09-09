@@ -1,3 +1,4 @@
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/app_constants.dart';
@@ -80,9 +81,9 @@ class _BrowserTabs extends ConsumerWidget {
     final cs = Theme.of(context).colorScheme;
 
     final tabs = [
-      (BrowserTab.samples, 'Samples'),
-      (BrowserTab.presets, 'Presets'),
-      (BrowserTab.projects, 'Projects'),
+      (BrowserTab.samples, 'browser.samples'.tr()),
+      (BrowserTab.presets, 'browser.presets'.tr()),
+      (BrowserTab.projects, 'browser.projects'.tr()),
     ];
 
     return Container(
@@ -156,7 +157,7 @@ class _BrowserSearchBar extends StatelessWidget {
         style: TextStyle(color: cs.onSurface, fontSize: 10),
         decoration: InputDecoration(
           isDense: true,
-          hintText: 'Search...',
+          hintText: 'browser.searchHint'.tr(),
           hintStyle: TextStyle(color: cs.onSurfaceVariant.withAlpha(128), fontSize: 10),
           prefixIcon: Icon(Icons.search_rounded, size: 12, color: cs.onSurfaceVariant),
           filled: true,
