@@ -53,6 +53,9 @@
   "toolbar.browser": "Browser",
   "toolbar.projectSettings": "Project Settings",
   "toolbar.menu": "Menu",
+  "toolbar.patternMode": "Pattern mode",
+  "toolbar.songMode": "Song/Playlist mode",
+  "toolbar.bpmSuffix": "BPM",
 
   "track.header": "Tracks",
   "track.empty": "No tracks",
@@ -174,5 +177,52 @@
   "songInfo.deviceAuto": "Automatic",
   "songInfo.deviceCount": "Available Devices",
 
-  "common.close": "Close"
+  "pianoRoll.chordTool": "Chords",
+
+  "menu.wavOnly": "Only WAV files are supported. Convert other formats to WAV first.",
+
+  "common.close": "Close",
+
+  "common.ok": "OK",
+
+  "settings.autoSave": "Auto Save",
+  "settings.autoSave.enable": "Enable Auto Save",
+  "settings.autoSave.enableDesc": "Automatically save the project to cache at the set interval",
+  "settings.autoSave.interval": "Save Interval",
+  "settings.autoSave.minutes": "{n} min",
+  "settings.editorMode": "Editor Mode",
+  "settings.editorMode.fullscreen": "Fullscreen Editing",
+  "settings.editorMode.float": "Floating Window Editing",
+  "settings.language.zh": "中文",
+  "settings.language.en": "English",
+
+  "instrumentPicker.title": "Select Instrument",
+  "instrumentPicker.done": "Done",
+  "instrumentPicker.preview": "Preview",
+  "instrumentPicker.imported": "Imported",
+  "instrumentPicker.unload": "Unload",
+  "instrumentPicker.tooltipLoadSf2": "Load .sf2 SoundFont",
+  "instrumentPicker.tooltipImportPack": "Import SoundFont / Instrument Pack (ZIP)",
+  "instrumentPicker.tooltipSynthEdit": "Edit in Synth",
+  "instrumentPicker.sf2LoadedToast": "Loaded SoundFont \"{label}\" ({count} presets)",
+  "instrumentPicker.sf2LoadedBanner": "SoundFont loaded: {label} — {count} sample presets (under SYNTHS)",
+  "instrumentPicker.sf2LoadFailed": "Failed to load SoundFont: {error}",
+  "instrumentPicker.zipNoInstruments": "No instrument definitions found in ZIP.",
+  "instrumentPicker.zipImported": "Imported {n} instruments.",
+  "instrumentPicker.zipImportFailed": "Failed to import: {error}",
+  "instrumentPicker.cat.keyboard": "KEYBOARDS",
+  "instrumentPicker.cat.string": "STRINGS",
+  "instrumentPicker.cat.wind": "BRASS & WIND",
+  "instrumentPicker.cat.synth": "SYNTHS",
+  "instrumentPicker.cat.percussion": "PERCUSSION",
+
+  "proj.unsavedTitle": "Unsaved Changes",
+  "proj.unsavedMessage": "The project has unsaved changes. Save them now?",
+  "proj.cancel": "Cancel",
+  "proj.discard": "Don't Save",
+  "proj.save": "Save",
+  "proj.recoveryTitle": "Auto-Save Cache Found",
+  "proj.recoveryMessage": "Found {n} auto-save cache file(s). Restore the most recent project?",
+  "proj.noRestore": "Don't Restore",
+  "proj.restore": "Restore"
 }

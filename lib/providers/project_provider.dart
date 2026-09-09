@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -46,12 +47,12 @@ class ProjectNotifier extends Notifier<Project> {
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('未保存的更改'),
-        content: const Text('当前项目有未保存的更改，是否保存？'),
+        title: Text('proj.unsavedTitle'.tr()),
+        content: Text('proj.unsavedMessage'.tr()),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: const Text('不保存')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop('save'), child: const Text('保存')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: Text('proj.cancel'.tr())),
+          TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: Text('proj.discard'.tr())),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop('save'), child: Text('proj.save'.tr())),
         ],
       ),
     );
@@ -167,11 +168,11 @@ class ProjectNotifier extends Notifier<Project> {
       final recover = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('发现自动保存的缓存'),
-          content: Text('检测到 ${files.length} 个自动保存的缓存文件。是否恢复最近的项目？'),
+          title: Text('proj.recoveryTitle'.tr()),
+          content: Text('proj.recoveryMessage'.tr(namedArgs: {'n': '${files.length}'})),
           actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('不恢复')),
-            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('恢复')),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text('proj.noRestore'.tr())),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text('proj.restore'.tr())),
           ],
         ),
       );
@@ -250,7 +251,7 @@ class ProjectNotifier extends Notifier<Project> {
           if (Platform.isAndroid || Platform.isIOS) {
             // On Android/iOS, pass bytes directly so FilePicker writes via ContentResolver
             outputPath = await FilePicker.platform.saveFile(
-              dialogTitle: 'Save Project',
+              dialogTitle: 'menu.file.saveProject'.tr(),
               fileName: '${state.name}${AppConstants.projectExtension}',
               type: FileType.custom,
               allowedExtensions: ['zap'],
@@ -258,7 +259,7 @@ class ProjectNotifier extends Notifier<Project> {
             );
           } else {
             outputPath = await FilePicker.platform.saveFile(
-              dialogTitle: 'Save Project',
+              dialogTitle: 'menu.file.saveProject'.tr(),
               fileName: '${state.name}${AppConstants.projectExtension}',
               type: FileType.custom,
               allowedExtensions: ['zap'],
@@ -638,12 +639,12 @@ class ProjectNotifier extends Notifier<Project> {
       final result = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('未保存的更改'),
-          content: const Text('当前项目有未保存的更改，是否保存？'),
+          title: Text('proj.unsavedTitle'.tr()),
+          content: Text('proj.unsavedMessage'.tr()),
           actions: [
-            TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: const Text('取消')),
-            TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: const Text('不保存')),
-            FilledButton(onPressed: () => Navigator.of(ctx).pop('save'), child: const Text('保存')),
+            TextButton(onPressed: () => Navigator.of(ctx).pop('cancel'), child: Text('proj.cancel'.tr())),
+            TextButton(onPressed: () => Navigator.of(ctx).pop('discard'), child: Text('proj.discard'.tr())),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop('save'), child: Text('proj.save'.tr())),
           ],
         ),
       );

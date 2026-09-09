@@ -53,6 +53,9 @@
   "toolbar.browser": "文件浏览器",
   "toolbar.projectSettings": "项目设置",
   "toolbar.menu": "菜单",
+  "toolbar.patternMode": "Pattern 模式",
+  "toolbar.songMode": "Song/Playlist 模式",
+  "toolbar.bpmSuffix": "BPM",
 
   "track.header": "音轨",
   "track.empty": "暂无音轨",
@@ -174,5 +177,52 @@
   "songInfo.deviceAuto": "自动选择",
   "songInfo.deviceCount": "可用设备数",
 
-  "common.close": "关闭"
+  "pianoRoll.chordTool": "和弦",
+
+  "menu.wavOnly": "仅支持 WAV 格式。如需导入其他格式，请先转换为 WAV。",
+
+  "common.close": "关闭",
+
+  "common.ok": "确定",
+
+  "settings.autoSave": "自动保存",
+  "settings.autoSave.enable": "启用自动保存",
+  "settings.autoSave.enableDesc": "按设定的时间间隔自动保存项目到缓存",
+  "settings.autoSave.interval": "保存间隔",
+  "settings.autoSave.minutes": "{n} 分钟",
+  "settings.editorMode": "编辑器模式",
+  "settings.editorMode.fullscreen": "全屏编辑",
+  "settings.editorMode.float": "浮窗编辑",
+  "settings.language.zh": "中文",
+  "settings.language.en": "English",
+
+  "instrumentPicker.title": "选择音色",
+  "instrumentPicker.done": "完成",
+  "instrumentPicker.preview": "预览",
+  "instrumentPicker.imported": "已导入",
+  "instrumentPicker.unload": "卸载",
+  "instrumentPicker.tooltipLoadSf2": "加载 .sf2 音色库",
+  "instrumentPicker.tooltipImportPack": "导入 SoundFont / 音色包 (ZIP)",
+  "instrumentPicker.tooltipSynthEdit": "合成器编辑",
+  "instrumentPicker.sf2LoadedToast": "已加载 SoundFont「{label}」({count} 个音色)",
+  "instrumentPicker.sf2LoadedBanner": "SoundFont 已加载: {label} — {count} 个采样音色(SYNTHS 分组下)",
+  "instrumentPicker.sf2LoadFailed": "SoundFont 加载失败: {error}",
+  "instrumentPicker.zipNoInstruments": "ZIP 中未找到音色定义。",
+  "instrumentPicker.zipImported": "已导入 {n} 个音色。",
+  "instrumentPicker.zipImportFailed": "导入失败: {error}",
+  "instrumentPicker.cat.keyboard": "键盘",
+  "instrumentPicker.cat.string": "弦乐",
+  "instrumentPicker.cat.wind": "铜管与木管",
+  "instrumentPicker.cat.synth": "合成器",
+  "instrumentPicker.cat.percussion": "打击乐",
+
+  "proj.unsavedTitle": "未保存的更改",
+  "proj.unsavedMessage": "当前项目有未保存的更改，是否保存？",
+  "proj.cancel": "取消",
+  "proj.discard": "不保存",
+  "proj.save": "保存",
+  "proj.recoveryTitle": "发现自动保存的缓存",
+  "proj.recoveryMessage": "检测到 {n} 个自动保存的缓存文件。是否恢复最近的项目？",
+  "proj.noRestore": "不恢复",
+  "proj.restore": "恢复"
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:easy_localization/easy_localization.dart';
 import 'package:media_kit/media_kit.dart' hide Track;
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -75,15 +76,17 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('已加载 SoundFont「${SoundFontService.instance.sourceLabel}」'
-                '(${SoundFontService.instance.presets.length} 个音色)'),
+            content: Text('instrumentPicker.sf2LoadedToast'.tr(namedArgs: {
+              'label': SoundFontService.instance.sourceLabel,
+              'count': '${SoundFontService.instance.presets.length}',
+            })),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('SoundFont 加载失败: $e')),
+          SnackBar(content: Text('instrumentPicker.sf2LoadFailed'.tr(namedArgs: {'error': '$e'}))),
         );
       }
     }
@@ -103,7 +106,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
       if (presets.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No instrument definitions found in ZIP.')),
+            SnackBar(content: Text('instrumentPicker.zipNoInstruments'.tr())),
           );
         }
         return;
@@ -112,13 +115,13 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
       if (mounted) {
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Imported ${presets.length} instruments.')),
+          SnackBar(content: Text('instrumentPicker.zipImported'.tr(namedArgs: {'n': '${presets.length}'}))),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to import: $e')),
+          SnackBar(content: Text('instrumentPicker.zipImportFailed'.tr(namedArgs: {'error': '$e'}))),
         );
       }
     }
@@ -261,7 +264,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
 
     // Separate user-imported presets for their own section
     final userGroup = InstrumentPreset.userPresets.isNotEmpty
-        ? {'Imported': InstrumentPreset.userPresets}
+        ? {'instrumentPicker.imported'.tr(): InstrumentPreset.userPresets}
         : <String, List<InstrumentPreset>>{};
 
     if (!_gmLoaded) {
@@ -274,7 +277,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.of(context).pop(),
           ),
-          title: const Text('Select Instrument'),
+          title: Text('instrumentPicker.title'.tr()),
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -293,18 +296,18 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.library_music, size: 20),
-            tooltip: '加载 .sf2 音色库',
+            tooltip: 'instrumentPicker.tooltipLoadSf2'.tr(),
             onPressed: _loadSoundFont,
           ),
           IconButton(
             icon: const Icon(Icons.folder_open, size: 20),
-            tooltip: 'Import SoundFont / Instrument Pack (ZIP)',
+            tooltip: 'instrumentPicker.tooltipImportPack'.tr(),
             onPressed: _importFromZip,
           ),
           if (_selectedId != null)
             TextButton(
               onPressed: () => Navigator.of(context).pop(_selectedId),
-              child: Text('Done', style: TextStyle(color: cs.primary)),
+              child: Text('instrumentPicker.done'.tr(), style: TextStyle(color: cs.primary)),
             ),
         ],
       ),
@@ -381,8 +384,10 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'SoundFont 已加载: ${SoundFontService.instance.sourceLabel}'
-                        ' — ${SoundFontService.instance.presets.length} 个采样音色(SYNTHS 分组下)',
+                        'instrumentPicker.sf2LoadedBanner'.tr(namedArgs: {
+                          'label': SoundFontService.instance.sourceLabel,
+                          'count': '${SoundFontService.instance.presets.length}',
+                        }),
                         style: const TextStyle(fontSize: 11),
                       ),
                     ),
@@ -393,7 +398,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
                         _previewCache.clear();
                         setState(() {});
                       },
-                      child: const Text('卸载', style: TextStyle(fontSize: 11)),
+                      child: Text('instrumentPicker.unload'.tr(), style: const TextStyle(fontSize: 11)),
                     ),
                   ],
                 ),
@@ -406,11 +411,11 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
 
   String _catLabel(InstrumentCategory cat) {
     switch (cat) {
-      case InstrumentCategory.keyboard: return 'KEYBOARDS';
-      case InstrumentCategory.string: return 'STRINGS';
-      case InstrumentCategory.wind: return 'BRASS & WIND';
-      case InstrumentCategory.synth: return 'SYNTHS';
-      case InstrumentCategory.percussion: return 'PERCUSSION';
+      case InstrumentCategory.keyboard: return 'instrumentPicker.cat.keyboard'.tr();
+      case InstrumentCategory.string: return 'instrumentPicker.cat.string'.tr();
+      case InstrumentCategory.wind: return 'instrumentPicker.cat.wind'.tr();
+      case InstrumentCategory.synth: return 'instrumentPicker.cat.synth'.tr();
+      case InstrumentCategory.percussion: return 'instrumentPicker.cat.percussion'.tr();
     }
   }
 }
@@ -503,13 +508,13 @@ class _InstrumentCard extends StatelessWidget {
                   color: cs.primary,
                 ),
                 onPressed: onPreview,
-                tooltip: 'Preview',
+                tooltip: 'instrumentPicker.preview'.tr(),
               ),
               if (onEdit != null)
                 IconButton(
                   icon: const Icon(Icons.tune, size: 20),
                   onPressed: onEdit,
-                  tooltip: '合成器编辑',
+                  tooltip: 'instrumentPicker.tooltipSynthEdit'.tr(),
                 ),
             ],
           ),

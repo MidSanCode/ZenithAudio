@@ -296,14 +296,14 @@ class _GeneralContent extends StatelessWidget {
         const SizedBox(height: 24),
         const SizedBox(height: 24),
         // Auto-Save
-        Text('自动保存', style: TextStyle(
+        Text('settings.autoSave'.tr(), style: TextStyle(
           color: context.outline, fontSize: 10,
           fontWeight: FontWeight.w600, letterSpacing: 1,
         )),
         const SizedBox(height: 8),
         SwitchListTile(
-          title: const Text('启用自动保存'),
-          subtitle: const Text('按设定的时间间隔自动保存项目到缓存'),
+          title: Text('settings.autoSave.enable'.tr()),
+          subtitle: Text('settings.autoSave.enableDesc'.tr()),
           value: settings.autoSaveEnabled,
           onChanged: (v) {
             ref.read(settingsProvider.notifier).setAutoSaveEnabled(v);
@@ -316,7 +316,7 @@ class _GeneralContent extends StatelessWidget {
         ),
         if (settings.autoSaveEnabled) ...[
           const SizedBox(height: 8),
-          Text('保存间隔', style: TextStyle(
+          Text('settings.autoSave.interval'.tr(), style: TextStyle(
             color: context.outline, fontSize: 10,
             fontWeight: FontWeight.w600, letterSpacing: 1,
           )),
@@ -330,11 +330,11 @@ class _GeneralContent extends StatelessWidget {
               child: DropdownButton<int>(
                 value: settings.autoSaveIntervalMinutes,
                 isExpanded: true,
-                items: const [
-                  DropdownMenuItem(value: 1, child: Text('1 分钟')),
-                  DropdownMenuItem(value: 5, child: Text('5 分钟')),
-                  DropdownMenuItem(value: 15, child: Text('15 分钟')),
-                  DropdownMenuItem(value: 30, child: Text('30 分钟')),
+                items: [
+                  DropdownMenuItem(value: 1, child: Text('settings.autoSave.minutes'.tr(namedArgs: {'n': '1'}))),
+                  DropdownMenuItem(value: 5, child: Text('settings.autoSave.minutes'.tr(namedArgs: {'n': '5'}))),
+                  DropdownMenuItem(value: 15, child: Text('settings.autoSave.minutes'.tr(namedArgs: {'n': '15'}))),
+                  DropdownMenuItem(value: 30, child: Text('settings.autoSave.minutes'.tr(namedArgs: {'n': '30'}))),
                 ],
                 onChanged: (v) {
                   if (v != null) {
@@ -348,7 +348,7 @@ class _GeneralContent extends StatelessWidget {
         ],
         const SizedBox(height: 24),
         // Editor Mode
-        Text('编辑器模式', style: TextStyle(
+        Text('settings.editorMode'.tr(), style: TextStyle(
           color: context.outline, fontSize: 10,
           fontWeight: FontWeight.w600, letterSpacing: 1,
         )),
@@ -362,9 +362,9 @@ class _GeneralContent extends StatelessWidget {
             child: DropdownButton<String>(
               value: settings.editorMode,
               isExpanded: true,
-              items: const [
-                DropdownMenuItem(value: 'fullscreen', child: Text('全屏编辑')),
-                DropdownMenuItem(value: 'float', child: Text('浮窗编辑')),
+              items: [
+                DropdownMenuItem(value: 'fullscreen', child: Text('settings.editorMode.fullscreen'.tr())),
+                DropdownMenuItem(value: 'float', child: Text('settings.editorMode.float'.tr())),
               ],
               onChanged: (v) {
                 if (v != null) ref.read(settingsProvider.notifier).setEditorMode(v);
@@ -388,9 +388,9 @@ class _GeneralContent extends StatelessWidget {
             child: DropdownButton<Locale>(
               value: context.locale,
               isExpanded: true,
-              items: const [
-                DropdownMenuItem(value: Locale('zh'), child: Text('中文')),
-                DropdownMenuItem(value: Locale('en'), child: Text('English')),
+              items: [
+                DropdownMenuItem(value: Locale('zh'), child: Text('settings.language.zh'.tr())),
+                DropdownMenuItem(value: Locale('en'), child: Text('settings.language.en'.tr())),
               ],
               onChanged: (v) {
                 if (v != null) {

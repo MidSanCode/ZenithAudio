@@ -245,9 +245,6 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
     final rackWidth = isMobile
         ? TrackPanel.widthFor(screenSize)
         : ref.watch(trackPanelWidthProvider).clamp(180.0, 460.0);
-    final mixerH = ref
-        .watch(mixerHeightProvider)
-        .clamp(AppConstants.mixerPanelCollapsedHeight + 90.0, 480.0);
     final mixerExpanded = ref.watch(mixerProvider).isExpanded;
 
     // Listen for playback state changes to reset user-interacted on play.

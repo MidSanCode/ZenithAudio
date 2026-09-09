@@ -107,7 +107,7 @@ class AudioMenuBar extends ConsumerWidget {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text('仅支持 WAV 格式。如需导入其他格式，请先转换为 WAV。'),
+                              content: Text('menu.wavOnly'.tr()),
                               duration: const Duration(seconds: 5),
                             ),
                           );

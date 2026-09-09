@@ -122,13 +122,13 @@ class AudioToolBar extends ConsumerWidget {
           // ── Pattern / Playlist placeholder ──
           _ModeChip(
             label: 'PAT',
-            tooltip: 'Pattern mode',
+            tooltip: 'toolbar.patternMode'.tr(),
             selected: true,
             onTap: () {},
           ),
           _ModeChip(
             label: 'SONG',
-            tooltip: 'Song/Playlist mode',
+            tooltip: 'toolbar.songMode'.tr(),
             selected: false,
             onTap: () {},
           ),
@@ -582,7 +582,7 @@ class _BpmWidget extends StatelessWidget {
               ),
             ),
             Text(
-              ' BPM',
+              'toolbar.bpmSuffix'.tr(),
               style: TextStyle(
                 fontSize: 9,
                 color: cs.onSurfaceVariant,
