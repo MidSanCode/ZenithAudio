@@ -51,10 +51,11 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
     // track whose notes/params changed and hot-swap its WAV so the newly
     // drawn notes are heard immediately.
     List<Track> lastTracks = ref.read(projectProvider).tracks;
-    ref.listen(projectProvider, (_, next) {      final prev = lastTracks;
+    ref.listen(projectProvider, (_, next) {
+      final prev = lastTracks;
       lastTracks = next.tracks;
       final wasPlaying = state == PlaybackState.playing && audio.isPlaying;
-      if (!wasPlaying || prev == null) return;
+      if (!wasPlaying) return;
       for (final t in next.tracks) {
         if (!t.isInstrument) continue;
         final before = prev.where((p) => p.id == t.id).firstOrNull;

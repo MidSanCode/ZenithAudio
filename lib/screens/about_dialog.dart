@@ -44,7 +44,7 @@ class AboutDialog extends StatelessWidget {
             const SizedBox(height: 6),
             _InfoRow(label: 'about.build'.tr(), value: AppConfig.appBuildNumber),
             const SizedBox(height: 20),
-            Text(AppConfig.appCopyright,
+            Text('about.copyright'.tr(),
               textAlign: TextAlign.center,
               style: TextStyle(color: context.outline, fontSize: 11),
             ),

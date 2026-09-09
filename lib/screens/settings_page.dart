@@ -625,7 +625,7 @@ class _AppInfoContent extends StatelessWidget {
         const SizedBox(height: 6),
         _InfoRow(label: 'about.build'.tr(), value: AppConfig.appBuildNumber),
         const SizedBox(height: 12),
-        Text(AppConfig.appCopyright,
+        Text('about.copyright'.tr(),
           style: TextStyle(fontSize: 11, color: context.outline),
           textAlign: TextAlign.center,
         ),

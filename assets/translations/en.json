@@ -109,6 +109,7 @@
   "about.title": "About",
   "about.version": "Version",
   "about.build": "Build",
+  "about.copyright": "Copyright © ZENITH AUDIO Team",
 
   "audioClip.undo": "Undo Edit",
   "audioClip.redo": "Redo Edit",

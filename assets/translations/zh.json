@@ -109,6 +109,7 @@
   "about.title": "关于",
   "about.version": "版本",
   "about.build": "构建",
+  "about.copyright": "卓声开发团队版权所有",
 
   "audioClip.undo": "撤销编辑",
   "audioClip.redo": "重做编辑",
