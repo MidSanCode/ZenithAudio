@@ -77,7 +77,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('instrumentPicker.sf2LoadedToast'.tr(namedArgs: {
-              'label': SoundFontService.instance.sourceLabel,
+              'label': SoundFontService.instance.sourceLabel ?? '-',
               'count': '${SoundFontService.instance.presets.length}',
             })),
           ),
@@ -385,7 +385,7 @@ class _InstrumentPickerPageState extends State<InstrumentPickerPage> {
                     Expanded(
                       child: Text(
                         'instrumentPicker.sf2LoadedBanner'.tr(namedArgs: {
-                          'label': SoundFontService.instance.sourceLabel,
+                          'label': SoundFontService.instance.sourceLabel ?? '-',
                           'count': '${SoundFontService.instance.presets.length}',
                         }),
                         style: const TextStyle(fontSize: 11),
