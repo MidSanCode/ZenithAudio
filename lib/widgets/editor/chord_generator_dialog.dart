@@ -44,6 +44,7 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
   double _beatsPerChord = 4;
   int _repeat = 2;
   bool _replaceExisting = false;
+  bool _melodyMode = false;
 
   @override
   void initState() {
@@ -63,8 +64,30 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
     return (sec / step).round() * step;
   }
 
+  List<({int degree, String type, double start, double duration, int octave})>
+      _melodyPlan(double start) {
+    return ChordService.harmonizePlan(
+      keyRootPc: _keyRoot,
+      mode: _mode,
+      progressionId: _progression,
+      melodyNotes: widget.existingNotes,
+      startSec: start,
+      secPerBeat: widget.secPerBeat,
+      beatsPerChord: _beatsPerChord,
+      octave: _octave,
+    );
+  }
+
   List<Note> _build() {
     final start = _snap(widget.insertSec);
+    if (_melodyMode) {
+      return ChordService.notesFromPlan(
+        _melodyPlan(start),
+        keyRootPc: _keyRoot,
+        mode: _mode,
+        patternId: _pattern,
+      );
+    }
     return ChordService.generateProgression(
       keyRootPc: _keyRoot,
       mode: _mode,
@@ -101,6 +124,24 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Source mode: template progression vs melody harmonization
+              SegmentedButton<bool>(
+                segments: [
+                  ButtonSegment(
+                      value: false,
+                      label: Text('chord.source.progression'.tr(),
+                          style: const TextStyle(fontSize: 12))),
+                  ButtonSegment(
+                      value: true,
+                      label: Text('chord.source.melody'.tr(),
+                          style: const TextStyle(fontSize: 12))),
+                ],
+                selected: {_melodyMode},
+                onSelectionChanged: (s) =>
+                    setState(() => _melodyMode = s.first),
+              ),
+              const SizedBox(height: 10),
+
               // Key + mode
               Row(
                 children: [
@@ -201,50 +242,80 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
               ),
               Row(
                 children: [
-                  Text('chord.repeat'.tr(), style: const TextStyle(fontSize: 12)),
-                  Expanded(
-                    child: Slider(
-                      value: _repeat.toDouble(),
-                      min: 1,
-                      max: 8,
-                      divisions: 7,
-                      label: '$_repeat',
-                      onChanged: (v) => setState(() => _repeat = v.round()),
+                  if (!_melodyMode) ...[
+                    Text('chord.repeat'.tr(), style: const TextStyle(fontSize: 12)),
+                    Expanded(
+                      child: Slider(
+                        value: _repeat.toDouble(),
+                        min: 1,
+                        max: 8,
+                        divisions: 7,
+                        label: '$_repeat',
+                        onChanged: (v) => setState(() => _repeat = v.round()),
+                      ),
                     ),
-                  ),
-                  Checkbox(
-                    value: _replaceExisting,
-                    onChanged: (v) =>
-                        setState(() => _replaceExisting = v ?? false),
-                  ),
-                  Text('chord.replaceExisting'.tr(), style: const TextStyle(fontSize: 12)),
+                    Checkbox(
+                      value: _replaceExisting,
+                      onChanged: (v) =>
+                          setState(() => _replaceExisting = v ?? false),
+                    ),
+                    Text('chord.replaceExisting'.tr(), style: const TextStyle(fontSize: 12)),
+                  ] else
+                    Expanded(
+                      child: Text(
+                        widget.existingNotes.isEmpty
+                            ? 'chord.melodyEmpty'.tr()
+                            : 'chord.melodyHint'.tr(namedArgs: {
+                                'n': '${widget.existingNotes.length}'
+                              }),
+                        style: TextStyle(
+                            fontSize: 11, color: cs.onSurfaceVariant),
+                      ),
+                    ),
                 ],
               ),
 
               const Divider(),
 
-              // Roman numeral preview
+              // Roman numeral preview (template) / chosen chords (melody)
               Wrap(
                 spacing: 6,
                 runSpacing: 4,
-                children: [
-                  for (final (deg, type) in ChordService
-                          .progressions[_progression] ??
-                      const <(int, String)>[])
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: cs.primaryContainer,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '${ChordService.noteNames[(_keyRoot + ChordService.degreeToSemitone(deg, mode: _mode)) % 12]} '
-                        '${ChordService.romanName(deg, type, mode: _mode)}',
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                    ),
-                ],
+                children: _melodyMode
+                    ? [
+                        for (final step in _melodyPlan(_snap(widget.insertSec)))
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: cs.primaryContainer,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${ChordService.noteNames[(_keyRoot + ChordService.degreeToSemitone(step.degree, mode: _mode)) % 12]} '
+                              '${ChordService.romanName(step.degree, step.type, mode: _mode)}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                      ]
+                    : [
+                        for (final (deg, type) in ChordService
+                                .progressions[_progression] ??
+                            const <(int, String)>[])
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: cs.primaryContainer,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${ChordService.noteNames[(_keyRoot + ChordService.degreeToSemitone(deg, mode: _mode)) % 12]} '
+                              '${ChordService.romanName(deg, type, mode: _mode)}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ),
+                      ],
               ),
               const SizedBox(height: 8),
               Text(
@@ -271,8 +342,9 @@ class _ChordGeneratorDialogState extends State<ChordGeneratorDialog> {
           onPressed: notes.isEmpty
               ? null
               : () {
-                  widget.onInsert(_replaceExisting ? notes : notes);
-                  Navigator.pop(context, _replaceExisting);
+                  widget.onInsert(notes);
+                  // Melody mode always merges (never replaces the melody).
+                  Navigator.pop(context, _melodyMode ? false : _replaceExisting);
                 },
           icon: const Icon(Icons.add, size: 16),
           label: Text('chord.insert'.tr()),

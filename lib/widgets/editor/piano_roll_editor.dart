@@ -290,17 +290,26 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
       ),
     ).then((replaceExisting) {
       if (replaceExisting == null) return; // cancelled
-      // Dialog already produced the notes; regenerate them deterministically
-      // is wasteful, so the dialog passes them through onInsert; here we
-      // simply rely on the last generated set captured below.
       final generated = _lastGeneratedChordNotes;
       if (generated == null || generated.isEmpty) return;
+      _lastGeneratedChordNotes = null;
+      // Re-read the track so we merge into the LATEST notes (the dialog may
+      // have been open while other edits landed).
+      final latest = ref
+          .read(projectProvider)
+          .tracks
+          .where((t) => t.id == widget.trackId)
+          .firstOrNull;
+      if (latest == null) return;
       final merged =
-          replaceExisting ? generated : [...track.notes, ...generated];
+          replaceExisting ? generated : [...latest.notes, ...generated];
       ref
           .read(projectProvider.notifier)
           .updateTrackNotes(widget.trackId, merged);
-      _lastGeneratedChordNotes = null;
+      // Immediately re-render + hot-swap (or invalidate the cached WAV when
+      // stopped) so the newly generated chords are audible right away in the
+      // piano roll instead of only after leaving this page.
+      ref.read(playbackProvider.notifier).refreshTrackAudio(widget.trackId);
     });
   }
 

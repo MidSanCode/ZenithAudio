@@ -106,6 +106,33 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
     });
   }
 
+  /// Explicitly refresh a track's audio after an edit (e.g. chord insert).
+  ///
+  /// While playing: cancels any pending debounced swap and hot-swaps the
+  /// re-rendered WAV immediately, so newly inserted notes are heard without
+  /// waiting. Otherwise: invalidates the cached WAV so the next play()
+  /// re-renders from scratch.
+  Future<void> refreshTrackAudio(String trackId) async {
+    final track = ref
+        .read(projectProvider)
+        .tracks
+        .where((t) => t.id == trackId)
+        .firstOrNull;
+    if (track == null || !track.isInstrument) return;
+    _swapTimers[trackId]?.cancel();
+    _swapTimers.remove(trackId);
+    _pendingSwap.remove(trackId);
+
+    final audio = ref.read(audioServiceProvider);
+    if (state == PlaybackState.playing && audio.isPlaying) {
+      try {
+        await audio.hotSwapTrackWav(track);
+      } catch (_) {}
+    } else {
+      audio.invalidateTrackWav(trackId);
+    }
+  }
+
   Future<void> _restart() async {
     await ref.read(audioServiceProvider).seekTo(0);
     ref.read(playheadPositionProvider.notifier).state = 0;

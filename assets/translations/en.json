@@ -294,6 +294,10 @@
   "synth.preview": "Preview",
 
   "chord.title": "Auto Chord Generator",
+  "chord.source.progression": "Progression",
+  "chord.source.melody": "Harmonize Melody",
+  "chord.melodyHint": "Harmonizes {n} placed notes (melody is kept)",
+  "chord.melodyEmpty": "No notes yet — place a melody first",
   "chord.key": "Key",
   "chord.major": "Major",
   "chord.minor": "Minor",

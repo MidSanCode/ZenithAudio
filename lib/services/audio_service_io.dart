@@ -340,6 +340,10 @@ class AudioService {
   /// Returns the cached WAV path for a track, or null if not cached.
   String? getCachedTrackPath(String trackId) => _wavCache[trackId]?.path;
 
+  /// Drop the cached WAV for a track so the next play() re-renders it even
+  /// if the note hash somehow matches.
+  void invalidateTrackWav(String trackId) => _wavCache.remove(trackId);
+
   /// Snapshot of the active audio output (device, params, bitrate) from the
   /// first live player. Returns null when nothing is loaded yet.
   AudioOutputInfo? getOutputInfo() {

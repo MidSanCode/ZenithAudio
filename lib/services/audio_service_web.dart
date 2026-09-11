@@ -207,6 +207,9 @@ class AudioService {
 
   String? getCachedTrackPath(String trackId) => _cachedPaths[trackId];
 
+  /// Web stub: no WAV cache to invalidate.
+  void invalidateTrackWav(String trackId) {}
+
   bool isTrackCached(Track track) {
     if (track.type == TrackType.audio) return track.audioFilePath != null;
     return _cachedPaths.containsKey(track.id);

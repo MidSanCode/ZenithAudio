@@ -294,6 +294,10 @@
   "synth.preview": "试听",
 
   "chord.title": "自动和弦生成",
+  "chord.source.progression": "进行模板",
+  "chord.source.melody": "旋律和声",
+  "chord.melodyHint": "将根据已放置的 {n} 个音符配和声(旋律保留)",
+  "chord.melodyEmpty": "钢琴卷帘中还没有音符,请先放置主旋律",
   "chord.key": "调性",
   "chord.major": "大调",
   "chord.minor": "小调",
