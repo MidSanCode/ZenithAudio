@@ -1,3 +1,5 @@
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,7 @@ import '../../providers/settings_provider.dart';
 import '../../providers/browser_provider.dart';
 import '../../services/file_service.dart';
 import '../../services/audio_converter.dart';
+import '../../services/cpu_monitor.dart';
 import '../../screens/settings_page.dart';
 import '../../screens/about_dialog.dart' as app;
 import '../editor/song_info_dialog.dart';
@@ -142,6 +145,10 @@ class AudioToolBar extends ConsumerWidget {
 
           // ── BPM (compact) ──
           _BpmWidget(bpm: project.bpm, ref: ref),
+          const SizedBox(width: 8),
+
+          // ── CPU usage ──
+          const _CpuIndicator(),
           const SizedBox(width: 8),
 
           // ── Snap toggle ──
@@ -586,6 +593,66 @@ class _BpmWidget extends StatelessWidget {
               style: TextStyle(
                 fontSize: 9,
                 color: cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── CPU usage indicator (Windows: GetSystemTimes via FFI) ──
+class _CpuIndicator extends ConsumerStatefulWidget {
+  const _CpuIndicator();
+
+  @override
+  ConsumerState<_CpuIndicator> createState() => _CpuIndicatorState();
+}
+
+class _CpuIndicatorState extends ConsumerState<_CpuIndicator> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(cpuMonitorProvider).start();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final monitor = ref.watch(cpuMonitorProvider);
+    if (!monitor.supported) return const SizedBox.shrink();
+    final usage = ref.watch(cpuUsageProvider);
+    final pct = (usage * 100).round();
+    final cs = Theme.of(context).colorScheme;
+    final color = pct >= 85
+        ? Colors.red.shade300
+        : pct >= 65
+            ? Colors.orange.shade300
+            : cs.onSurfaceVariant;
+
+    return Tooltip(
+      message: 'toolbar.cpuTooltip'.tr(),
+      child: Container(
+        height: 22,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.memory_rounded, size: 12, color: color),
+            const SizedBox(width: 4),
+            Text(
+              'CPU $pct%',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: color,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ],
