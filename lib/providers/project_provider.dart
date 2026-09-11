@@ -58,7 +58,10 @@ class ProjectNotifier extends Notifier<Project> {
     );
     if (result == 'save') {
       await saveProject();
-      return true;
+      // If the user cancelled the save dialog the project is still dirty —
+      // treat that as "not confirmed" so the caller keeps the app open
+      // instead of losing the unsaved changes.
+      return !_isDirty;
     }
     return result == 'discard';
   }

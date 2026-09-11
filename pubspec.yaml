@@ -45,6 +45,7 @@ dependencies:
   record: ^7.1.1
   archive: ^4.0.2
   shared_preferences: ^2.3.4
+  window_manager: ^0.4.3
 dependency_overrides:
   media_kit:
     git:
