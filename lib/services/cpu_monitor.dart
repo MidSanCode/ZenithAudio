@@ -30,7 +30,7 @@ typedef _VirtualAllocC = ffi.Pointer<ffi.Uint32> Function(
     ffi.Uint32 type,
     ffi.Uint32 protect);
 typedef _VirtualAllocD = ffi.Pointer<ffi.Uint32> Function(
-    ffi.Pointer<ffi.Uint32>, ffi.Uint64, ffi.Uint32, ffi.Uint32);
+    ffi.Pointer<ffi.Uint32>, int, int, int);
 
 class CpuMonitor {
   static const int _memCommitReserve = 0x3000; // MEM_COMMIT | MEM_RESERVE
