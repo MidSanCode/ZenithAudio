@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:easy_localization/easy_localization.dart';
@@ -6,10 +8,16 @@ import 'core/theme/app_theme.dart';
 import 'core/utils/logger.dart';
 import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
+import 'screens/editor_screen.dart';
 import 'screens/workspace_screen.dart';
+import 'services/project_serializer.dart';
+import 'services/single_instance.dart';
 
 class ZenithAudioApp extends ConsumerStatefulWidget {
-  const ZenithAudioApp({super.key});
+  const ZenithAudioApp({super.key, this.initialProjectPath});
+
+  /// Project archive handed to us by the OS file association, if any.
+  final String? initialProjectPath;
 
   @override
   ConsumerState<ZenithAudioApp> createState() => _ZenithAudioAppState();
@@ -24,11 +32,53 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    // A later launch hands its project over instead of opening a new window.
+    SingleInstance.startWatching(_onHandoff);
+    final path = widget.initialProjectPath;
+    if (path != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openProjectPath(path));
+    }
+  }
+
+  /// Opens a project handed over by a later launch.
+  void _onHandoff(String path) {
+    if (!mounted) return;
+    _openProjectPath(path);
+  }
+
+  /// Opens a project path from the OS and shows it in the editor.
+  Future<void> _openProjectPath(String path) async {
+    final navigator = _rootNavKey.currentState;
+    if (navigator == null) return;
+    try {
+      final notifier = ref.read(projectProvider.notifier);
+      final isDirectory = await Directory(path).exists();
+      final opened = isDirectory
+          ? await notifier.openWorkspaceProject(path)
+          : await _openArchive(notifier, path);
+      if (!opened) {
+        AppLogger.w('Could not open project path: $path');
+        return;
+      }
+      if (!mounted) return;
+      navigator.push(MaterialPageRoute(builder: (_) => const EditorScreen()));
+    } catch (e) {
+      AppLogger.e('Failed to open project path', e);
+    }
+  }
+
+  /// Opens an archive file (`.zaproj` / `.lgdf` / `.zap`).
+  Future<bool> _openArchive(ProjectNotifier notifier, String path) async {
+    final serialized =
+        await const ProjectSerializer().deserialize(await File(path).readAsBytes());
+    if (serialized == null) return false;
+    return notifier.loadSerializedProject(serialized);
   }
 
   @override
   void dispose() {
     windowManager.removeListener(this);
+    SingleInstance.release();
     super.dispose();
   }
 

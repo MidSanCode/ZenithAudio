@@ -1,3 +1,4 @@
+import 'lgdf_format.dart';
 import 'workspace_service.dart';
 
 /// Web has no writable local workspace — projects are saved through browser
@@ -14,7 +15,7 @@ class WorkspaceService {
   }
 
   Future<String> defaultProjectPath(String projectName, String projectId) async {
-    return '$projectName.lgdf';
+    return '$projectName${Lgdf.extension}';
   }
 
   Future<void> deleteProject(String path) async {}

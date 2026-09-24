@@ -74,6 +74,22 @@ class ProjectNotifier extends Notifier<Project> {
     return result == 'discard';
   }
 
+  /// Leaves the editor and returns to the workspace.
+  ///
+  /// Prompts to save when there are unsaved changes — cancelling the prompt
+  /// keeps the user in the editor. Returns true when navigation happened.
+  Future<bool> leaveEditor(BuildContext context) async {
+    // Capture the navigator before the await so we never touch a disposed
+    // BuildContext.
+    final navigator = Navigator.of(context);
+    if (!navigator.canPop()) return false;
+
+    final confirmed = await confirmDiscard(context);
+    if (!confirmed) return false;
+    navigator.pop();
+    return true;
+  }
+
   @override
   Project build() {
     ref.onDispose(() {
@@ -203,6 +219,25 @@ class ProjectNotifier extends Notifier<Project> {
     } catch (_) {}
   }
 
+  /// Loads an already-deserialized project (used by the launch flow).
+  ///
+  /// The project is not attached to a workspace directory until it is saved.
+  Future<bool> loadSerializedProject(SerializedProject serialized) async {
+    try {
+      _pushUndo();
+      stopAutoSave();
+      await _loadSerialized(serialized);
+      _currentFilePath = null;
+      _isDirty = true;
+      startAutoSave();
+      AppLogger.i('Project loaded from external archive: ${state.name}');
+      return true;
+    } catch (e) {
+      AppLogger.e('Failed to load external project', e);
+      return false;
+    }
+  }
+
   Future<void> _loadSerialized(SerializedProject serialized) async {
     await ref.read(audioServiceProvider).unloadAll();
     _lgdfInfo = serialized.lgdfInfo;
@@ -324,7 +359,7 @@ class ProjectNotifier extends Notifier<Project> {
         dialogTitle: 'menu.file.exportProject'.tr(),
         fileName: fileName,
         type: FileType.custom,
-        allowedExtensions: ['lgdf'],
+        allowedExtensions: AppConstants.projectOpenExtensions,
       );
       if (outputPath == null) return false;
 
@@ -383,13 +418,11 @@ class ProjectNotifier extends Notifier<Project> {
       } else if (type == FileSystemEntityType.file) {
         final file = File(path);
         final name = file.uri.pathSegments.last;
-        // Already an archive — copy it through unchanged.
+        // Already an archive — copy it through unchanged, but re-extension it
+        // to the current container so old `.lgdf`/`.zap` exports come out as
+        // `.zaproj`.
         bytes = await file.readAsBytes();
-        baseName = name.toLowerCase().endsWith(Lgdf.extension)
-            ? name.substring(0, name.length - Lgdf.extension.length)
-            : (name.toLowerCase().endsWith('.zap')
-                ? name.substring(0, name.length - 4)
-                : name);
+        baseName = Lgdf.stripArchiveExtension(name);
       } else {
         return false;
       }
@@ -398,7 +431,7 @@ class ProjectNotifier extends Notifier<Project> {
         dialogTitle: 'menu.file.exportProject'.tr(),
         fileName: '$baseName${Lgdf.extension}',
         type: FileType.custom,
-        allowedExtensions: ['lgdf'],
+        allowedExtensions: AppConstants.projectOpenExtensions,
       );
       if (outputPath == null) return false;
 

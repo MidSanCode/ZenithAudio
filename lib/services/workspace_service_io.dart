@@ -40,8 +40,8 @@ class WorkspaceService {
   /// Absolute path of the workspace folder (created on demand).
   Future<String> directoryPath() async => (await directory()).path;
 
-  /// Lists workspace entries: LGDF project directories first, then legacy
-  /// `.zap` files and exported `.lgdf` archives. Newest first.
+  /// Lists workspace entries: LGDF project directories first, then exported
+  /// `.zaproj` archives (and legacy `.lgdf` / `.zap`). Newest first.
   Future<List<WorkspaceProjectFile>> projects() async {
     final folder = await directory();
     final entries = <WorkspaceProjectFile>[];
@@ -63,9 +63,7 @@ class WorkspaceService {
         ));
       } else if (entity is File) {
         final lower = entity.path.toLowerCase();
-        final isLgdf = lower.endsWith(Lgdf.extension);
-        final isLegacy = lower.endsWith('.zap');
-        if (!isLgdf && !isLegacy) continue;
+        if (!Lgdf.knownArchiveExtensions.any(lower.endsWith)) continue;
         final stat = await entity.stat();
         entries.add(WorkspaceProjectFile(
           path: entity.path,
@@ -89,10 +87,12 @@ class WorkspaceService {
     String projectId,
   ) async {
     final folder = await directory();
+    // An unnamed project must still get a unique folder, otherwise a second
+    // "untitled" would overwrite the first.
     final trimmed = projectName.trim();
     final slug = (trimmed.isEmpty || trimmed.toLowerCase() == 'untitled')
-        ? 'project-${projectId.isEmpty ? 'new' : projectId.substring(0, 8)}'
-        : Lgdf.slugify(trimmed, fallback: 'project');
+        ? 'project-${Lgdf.shortId(projectId)}'
+        : Lgdf.slugify(trimmed, fallback: 'project-${Lgdf.shortId(projectId)}');
     return '${folder.path}/$slug';
   }
 

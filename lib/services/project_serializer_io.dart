@@ -104,7 +104,7 @@ class ProjectSerializer {
 
     final slug = Lgdf.slugify(
       project.name,
-      fallback: 'project-${project.id.isEmpty ? 'new' : project.id.substring(0, 8)}',
+      fallback: 'project-${Lgdf.shortId(project.id)}',
     );
     await _writeJson(
       File('${projectDir.path}/${Lgdf.configSpecFile}'),
@@ -250,7 +250,7 @@ class ProjectSerializer {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final slug = Lgdf.slugify(
       project.name,
-      fallback: 'project-${project.id.isEmpty ? 'new' : project.id.substring(0, 8)}',
+      fallback: 'project-${Lgdf.shortId(project.id)}',
     );
 
     await _ensureDir(Directory('${projectDir.path}/${Lgdf.audioAssetsDir}'));
@@ -312,7 +312,7 @@ class ProjectSerializer {
     throw UnsupportedError('downloadArchive is only supported on web');
   }
 
-  /// Reads a project archive (LGDF `.lgdf` or legacy `.zap`).
+  /// Reads a project archive (`.zaproj`, legacy `.lgdf`, or legacy `.zap`).
   ///
   /// Extracted resources land in a temp directory so [AudioService] can
   /// reference them by path.

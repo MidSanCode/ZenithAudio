@@ -39,6 +39,14 @@ class AudioToolBar extends ConsumerWidget {
       ),
       child: Row(
         children: [
+          // ── Back to workspace ──
+          _TbBtn(
+            icon: Icons.arrow_back_rounded,
+            tooltip: 'toolbar.backToWorkspace'.tr(),
+            onTap: () => ref.read(projectProvider.notifier).leaveEditor(context),
+          ),
+          _TbSep(),
+
           // ── File operations ──
           _TbBtn(
             icon: Icons.note_add_outlined,

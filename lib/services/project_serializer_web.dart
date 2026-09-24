@@ -34,7 +34,7 @@ class ProjectSerializer {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final slug = Lgdf.slugify(
       project.name,
-      fallback: 'project-${project.id.isEmpty ? 'new' : project.id.substring(0, 8)}',
+      fallback: 'project-${Lgdf.shortId(project.id)}',
     );
     final archive = Archive();
 

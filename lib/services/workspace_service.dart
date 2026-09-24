@@ -10,10 +10,12 @@
 export 'workspace_service_io.dart'
     if (dart.library.html) 'workspace_service_web.dart';
 
+import 'lgdf_format.dart';
+
 /// One entry inside the workspace.
 ///
 /// LGDF projects are directories (`isDirectory == true`); legacy single-file
-/// `.zap` projects and exported `.lgdf` archives are files.
+/// `.zaproj` archives (and legacy `.lgdf` / `.zap`) are files.
 class WorkspaceProjectFile {
   final String path;
   final String name;
@@ -38,10 +40,9 @@ class WorkspaceProjectFile {
   String get label {
     final display = displayName?.trim();
     if (display != null && display.isNotEmpty) return display;
-    // Directory-mode projects are named by their folder; strip any extension
-    // so `my-song.zap` and the folder `my-song` read the same.
+    // Directory-mode projects are named by their folder; archives have their
+    // container extension removed so `my-song.zaproj` reads as `my-song`.
     if (isDirectory) return name;
-    final dot = name.lastIndexOf('.');
-    return dot > 0 ? name.substring(0, dot) : name;
+    return Lgdf.stripArchiveExtension(name);
   }
 }

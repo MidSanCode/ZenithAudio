@@ -14,11 +14,12 @@ import 'package:crypto/crypto.dart';
 /// ├── metadata/audios/       元数据层：与 assets/ 一一镜像
 /// ├── spec/                  描述层：project.json / config.json / overview.md
 /// ├── work/                  SDK 临时文件（永不导出）
-/// └── dist/                  发布目录：导出的 .lgdf 包
+/// └── dist/                  发布目录：导出的 .zaproj 包
 /// ```
 ///
-/// Export packs the directory into a Deflate ZIP with a user-chosen extension
-/// (`.lgdf` here) plus a `.sha256` companion file.
+/// Export packs the directory into a Deflate ZIP with the `.zaproj` extension
+/// (ZENITH AUDIO PROJect) plus a `.sha256` companion file. The *contents* are
+/// always LGDF — only the outer container extension is app-specific.
 class Lgdf {
   Lgdf._();
 
@@ -28,8 +29,39 @@ class Lgdf {
   /// Lowest SDK version able to read what we write.
   static const int minSdk = 1;
 
-  /// Default archive extension for exports.
-  static const String extension = '.lgdf';
+  /// Archive extension used for exports (the app's own project container).
+  static const String extension = '.zaproj';
+
+  /// Extensions accepted as an exported project archive, newest first.
+  static const List<String> knownArchiveExtensions = ['.zaproj', '.lgdf', '.zap'];
+
+  /// Removes a known archive extension from [fileName], if present.
+  static String stripArchiveExtension(String fileName) {
+    final lower = fileName.toLowerCase();
+    for (final ext in knownArchiveExtensions) {
+      if (lower.endsWith(ext)) {
+        return fileName.substring(0, fileName.length - ext.length);
+      }
+    }
+    return fileName;
+  }
+
+  /// A short, slug-safe fragment of a project id for fallback naming.
+  ///
+  /// Ids shorter than 8 characters are used whole — a fixed-length prefix
+  /// would throw on them.
+  static String shortId(String id) {
+    if (id.isEmpty) return 'new';
+    return id.length <= 8 ? id : id.substring(0, 8);
+  }
+
+  /// The project slug used for folder and package names.
+  ///
+  /// Takes the raw name/id so this module stays free of model imports.
+  static String projectSlug(String name, String id) => slugify(
+        name,
+        fallback: 'project-${shortId(id)}',
+      );
 
   // ── Canonical paths ──
 

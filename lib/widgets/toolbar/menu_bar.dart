@@ -35,11 +35,8 @@ class AudioMenuBar extends ConsumerWidget {
               MenuItem(
                 label: 'menu.file.workspace'.tr(),
                 onTap: () async {
-                  final navigator = Navigator.of(context);
-                  if (!navigator.canPop()) return;
-                  // Ask about unsaved changes before leaving the editor.
-                  final ok = await ref.read(projectProvider.notifier).confirmDiscard(context);
-                  if (ok) navigator.pop();
+                  // Prompts to save when there are unsaved changes.
+                  await ref.read(projectProvider.notifier).leaveEditor(context);
                 },
               ),
               MenuItem.separator(),

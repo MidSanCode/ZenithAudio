@@ -192,10 +192,7 @@ class LgdfProjectCodec {
     required int lastUpdateTime,
     int version = 1,
   }) {
-    final slug = Lgdf.slugify(
-      project.name,
-      fallback: 'project-${project.id.isEmpty ? 'new' : project.id.substring(0, 8)}',
-    );
+    final slug = Lgdf.projectSlug(project.name, project.id);
     return Lgdf.buildInfo(
       name: slug,
       displayName: project.name,

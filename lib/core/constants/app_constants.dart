@@ -23,11 +23,11 @@ class AppConstants {
   /// Legacy single-file project extension (still readable).
   static const String projectExtension = '.zap';
 
-  /// Exported project archives follow the LGDF standard and use `.lgdf`.
-  static const String lgdfExtension = '.lgdf';
+  /// Exported project archives use `.zaproj`; the contents are LGDF.
+  static const String lgdfExtension = '.zaproj';
 
-  /// Extensions the project picker accepts (LGDF archives + legacy .zap).
-  static const List<String> projectOpenExtensions = ['lgdf', 'zap'];
+  /// Extensions the project picker accepts (current archive + legacy formats).
+  static const List<String> projectOpenExtensions = ['zaproj', 'lgdf', 'zap'];
 
   // v2: adds TrackType.synth (synth-family presets get their own track type).
   static const int projectFormatVersion = 2;
