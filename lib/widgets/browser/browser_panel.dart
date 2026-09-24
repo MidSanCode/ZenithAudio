@@ -193,8 +193,8 @@ class _BrowserTree extends ConsumerWidget {
           _PlaceholderItem('Pad 1', Icons.piano_rounded),
         ],
       BrowserTab.projects => [
-          _PlaceholderItem('My Song.zap', Icons.folder_rounded),
-          _PlaceholderItem('Beat Idea.zap', Icons.folder_rounded),
+          _PlaceholderItem('My Song', Icons.folder_rounded),
+          _PlaceholderItem('Beat Idea', Icons.folder_rounded),
         ],
     };
 

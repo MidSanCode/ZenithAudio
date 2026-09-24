@@ -41,7 +41,7 @@ class BrowserService {
   }
 
   static const audioExtensions = ['.wav', '.mp3', '.flac', '.ogg', '.aac', '.m4a'];
-  static const presetExtensions = ['.zap', '.mid', '.midi', '.fxp', '.fxb'];
+  static const presetExtensions = ['.lgdf', '.zap', '.mid', '.midi', '.fxp', '.fxb'];
 
   bool isAudioFile(String path) {
     final ext = path.split('.').last.toLowerCase();
