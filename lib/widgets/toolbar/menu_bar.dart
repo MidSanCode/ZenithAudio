@@ -60,6 +60,13 @@ class AudioMenuBar extends ConsumerWidget {
                 },
               ),
               MenuItem(
+                label: 'menu.file.openFolder'.tr(),
+                onTap: () async {
+                  final notifier = ref.read(projectProvider.notifier);
+                  await notifier.openProjectFolder();
+                },
+              ),
+              MenuItem(
                 label: 'menu.file.saveProject'.tr(),
                 shortcut: 'shortcut.saveProject'.tr(),
                 onTap: () async {

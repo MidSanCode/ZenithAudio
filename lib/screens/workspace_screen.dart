@@ -1,4 +1,7 @@
+import 'dart:io' show Platform;
+
 import 'package:easy_localization/easy_localization.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -204,8 +207,35 @@ class _ActionColumn extends ConsumerWidget {
               refreshWorkspace(ref);
             },
           ),
+          const SizedBox(height: 6),
+          _PrimaryAction(
+            icon: Icons.drive_file_move_outline,
+            label: 'workspace.openFolder'.tr(),
+            filled: false,
+            compact: true,
+            onTap: () async {
+              final ok =
+                  await ref.read(projectProvider.notifier).openProjectFolder();
+              if (!ok || !context.mounted) return;
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const EditorScreen()),
+              );
+              refreshWorkspace(ref);
+            },
+          ),
 
           const Spacer(),
+          Text(
+            'workspace.formatHint'.tr(),
+            style: TextStyle(color: context.outline, fontSize: 9, height: 1.4),
+          ),
+          const SizedBox(height: 6),
+          if (_isIOS)
+            Text(
+              'workspace.filesAppHint'.tr(),
+              style: TextStyle(color: cs.primary.withAlpha(180), fontSize: 9, height: 1.4),
+            ),
+          if (_isIOS) const SizedBox(height: 6),
           Divider(color: Theme.of(context).dividerColor, thickness: 0.5),
           const SizedBox(height: 10),
           Text(
@@ -217,6 +247,15 @@ class _ActionColumn extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  static bool get _isIOS {
+    if (kIsWeb) return false;
+    try {
+      return Platform.isIOS;
+    } catch (_) {
+      return false;
+    }
   }
 }
 
@@ -244,11 +283,15 @@ class _PrimaryAction extends StatefulWidget {
   final bool filled;
   final VoidCallback onTap;
 
+  /// Compact actions render shorter and with a lighter weight.
+  final bool compact;
+
   const _PrimaryAction({
     required this.icon,
     required this.label,
     required this.filled,
     required this.onTap,
+    this.compact = false,
   });
 
   @override
@@ -273,7 +316,7 @@ class _PrimaryActionState extends State<_PrimaryAction> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Container(
-          height: 40,
+          height: widget.compact ? 32 : 40,
           decoration: BoxDecoration(
             color: bg,
             borderRadius: BorderRadius.circular(6),
@@ -281,15 +324,15 @@ class _PrimaryActionState extends State<_PrimaryAction> {
           ),
           child: Row(
             children: [
-              const SizedBox(width: 14),
-              Icon(widget.icon, size: 16, color: fg),
+              SizedBox(width: widget.compact ? 12 : 14),
+              Icon(widget.icon, size: widget.compact ? 14 : 16, color: fg),
               const SizedBox(width: 10),
               Text(
                 widget.label,
                 style: TextStyle(
                   color: fg,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+                  fontSize: widget.compact ? 12 : 13,
+                  fontWeight: widget.compact ? FontWeight.w500 : FontWeight.w600,
                 ),
               ),
             ],
@@ -414,8 +457,8 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
-          ? 'workspace.exportDone'.tr(namedArgs: {'path': widget.file.name})
-          : 'workspace.exportFailed'.tr(namedArgs: {'error': '-'})),
+          ? 'workspace.exportDone'.tr(namedArgs: {'path': widget.file.label})
+          : 'workspace.exportFailed'.tr()),
       duration: const Duration(seconds: 2),
     ));
   }
@@ -425,7 +468,7 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('workspace.deleteTitle'.tr()),
-        content: Text('workspace.deleteConfirm'.tr(namedArgs: {'name': widget.file.name})),
+        content: Text('workspace.deleteConfirm'.tr(namedArgs: {'name': widget.file.label})),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -483,7 +526,9 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
                     children: [
                       Center(
                         child: Icon(
-                          Icons.graphic_eq_rounded,
+                          widget.file.isDirectory
+                              ? Icons.folder_rounded
+                              : Icons.folder_zip_rounded,
                           size: 26,
                           color: cs.primary.withAlpha(_hovered ? 200 : 110),
                         ),
@@ -520,7 +565,7 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      widget.file.name,
+                      widget.file.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

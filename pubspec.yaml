@@ -44,6 +44,7 @@ dependencies:
   logger: ^2.5.0
   record: ^7.1.1
   archive: ^4.0.2
+  crypto: ^3.0.7
   shared_preferences: ^2.3.4
   window_manager: ^0.4.3
 dependency_overrides:

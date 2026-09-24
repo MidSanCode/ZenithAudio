@@ -20,12 +20,23 @@ class AppConstants {
   static const double mobileBreakpoint = 600;
   static const double tabletBreakpoint = 1024;
 
+  /// Legacy single-file project extension (still readable).
   static const String projectExtension = '.zap';
+
+  /// Exported project archives follow the LGDF standard and use `.lgdf`.
+  static const String lgdfExtension = '.lgdf';
+
+  /// Extensions the project picker accepts (LGDF archives + legacy .zap).
+  static const List<String> projectOpenExtensions = ['lgdf', 'zap'];
+
   // v2: adds TrackType.synth (synth-family presets get their own track type).
   static const int projectFormatVersion = 2;
   static const String projectAssetsDir = 'assets/';
   static const String projectInstrumentsDir = 'instruments/';
   static const String projectEffectsDir = 'effects/';
+
+  /// Default project name used before the user names the project.
+  static const String untitledProjectName = 'untitled';
 
   static const List<String> supportedAudioFormats = [
     '.wav', '.mp3', '.flac', '.aac', '.ogg', '.m4a',

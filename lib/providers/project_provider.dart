@@ -15,6 +15,7 @@ import '../models/instrument.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
 import '../services/audio_service.dart';
+import '../services/lgdf_format.dart';
 import '../services/project_serializer.dart';
 import '../services/workspace_service.dart';
 import 'workspace_provider.dart';
@@ -29,8 +30,13 @@ class ProjectNotifier extends Notifier<Project> {
   static const _uuid = Uuid();
   static const int _maxUndo = 50;
 
-  /// Current save path for the project (set after first save or open).
+  /// Current project directory inside the workspace (set after first save or
+  /// when an LGDF directory project is opened).
   String? _currentFilePath;
+
+  /// LGDF identity of the loaded project, so a re-save keeps its created time
+  /// and version.
+  LgdfProjectInfo? _lgdfInfo;
 
   /// Tracks whether there are unsaved changes.
   bool _isDirty = false;
@@ -137,13 +143,11 @@ class ProjectNotifier extends Notifier<Project> {
   Future<void> _autoSave() async {
     if (!_isDirty) return;
     try {
-      final audioBytes = <String, Uint8List>{};
-      final serializer = ProjectSerializer();
-      final bytes = await serializer.serialize(state, audioFileBytes: audioBytes);
+      final bytes = await const ProjectSerializer().serialize(state);
       final dir = await getApplicationDocumentsDirectory();
       final autoDir = Directory('${dir.path}/.autosave');
       if (!await autoDir.exists()) await autoDir.create(recursive: true);
-      final path = '${autoDir.path}/${state.id}.zap';
+      final path = '${autoDir.path}/${state.id}${Lgdf.extension}';
       await File(path).writeAsBytes(bytes);
       AppLogger.d('Auto-saved to $path');
     } catch (e) {
@@ -155,7 +159,7 @@ class ProjectNotifier extends Notifier<Project> {
   static Future<String?> findAutoSaveCache(String projectId) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final path = '${dir.path}/.autosave/$projectId.zap';
+      final path = '${dir.path}/.autosave/$projectId${Lgdf.extension}';
       if (await File(path).exists()) return path;
     } catch (_) {}
     return null;
@@ -167,7 +171,11 @@ class ProjectNotifier extends Notifier<Project> {
       final dir = await getApplicationDocumentsDirectory();
       final autoDir = Directory('${dir.path}/.autosave');
       if (!await autoDir.exists()) return;
-      final files = await autoDir.list().where((e) => e.path.endsWith('.zap')).toList();
+      final files = await autoDir
+          .list()
+          .where((e) =>
+              e.path.endsWith(Lgdf.extension) || e.path.endsWith('.zap'))
+          .toList();
       if (files.isEmpty) return;
       if (!context.mounted) return;
       final recover = await showDialog<bool>(
@@ -186,8 +194,7 @@ class ProjectNotifier extends Notifier<Project> {
         final newest = files.reduce((a, b) =>
           File(a.path).statSync().modified.isAfter(File(b.path).statSync().modified) ? a : b);
         final bytes = await File(newest.path).readAsBytes();
-        final serializer = ProjectSerializer();
-        final serialized = await serializer.deserialize(bytes);
+        final serialized = await const ProjectSerializer().deserialize(bytes);
         if (serialized != null && context.mounted) {
           final notifier = ref.read(projectProvider.notifier);
           await notifier._loadSerialized(serialized);
@@ -198,6 +205,7 @@ class ProjectNotifier extends Notifier<Project> {
 
   Future<void> _loadSerialized(SerializedProject serialized) async {
     await ref.read(audioServiceProvider).unloadAll();
+    _lgdfInfo = serialized.lgdfInfo;
     final updatedTracks = serialized.project.tracks.map((t) {
       if (t.type == TrackType.audio) {
         final audioPath = serialized.trackAudioFiles[t.id];
@@ -223,49 +231,56 @@ class ProjectNotifier extends Notifier<Project> {
   Future<void> clearAutoSaveCache() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final path = '${dir.path}/.autosave/${state.id}.zap';
-      final file = File(path);
-      if (await file.exists()) await file.delete();
+      for (final ext in [Lgdf.extension, '.zap']) {
+        final file = File('${dir.path}/.autosave/${state.id}$ext');
+        if (await file.exists()) await file.delete();
+      }
     } catch (_) {}
   }
 
   // ──── Save / Open ────
 
-  /// Saves the project into the app workspace. Returns true on success.
+  /// Saves the project into the app workspace as an LGDF directory-mode
+  /// project. Returns true on success.
   Future<bool> saveProject() async {
     try {
       AppLogger.i('Saving project...');
-
-      // Serialize FIRST (before file picker on mobile)
-      final audioBytes = <String, Uint8List>{};
-      final serializer = ProjectSerializer();
-      final bytes = await serializer.serialize(state, audioFileBytes: audioBytes);
+      final serializer = const ProjectSerializer();
 
       if (kIsWeb) {
-        final webSerializer = ProjectSerializer();
-        webSerializer.downloadArchive(bytes, '${state.name}${AppConstants.projectExtension}');
+        // The browser cannot hold a project directory — emit an .lgdf archive.
+        final bytes = await serializer.serialize(state);
+        serializer.downloadArchive(
+          bytes,
+          '${Lgdf.slugify(state.name)}${Lgdf.extension}',
+        );
+        _isDirty = false;
         AppLogger.i('Project saved via browser download');
         return true;
       }
 
-      // Projects are saved into the application's workspace. Export uses a
-      // separate command so a copy can be sent elsewhere without moving it.
-      String? outputPath;
-      if (_currentFilePath != null && await File(_currentFilePath!).exists()) {
-        outputPath = _currentFilePath;
+      // Resolve the project directory inside the workspace.
+      final Directory projectDir;
+      if (_currentFilePath != null &&
+          await Directory(_currentFilePath!).exists()) {
+        projectDir = Directory(_currentFilePath!);
       } else {
-        outputPath = await WorkspaceService().defaultProjectPath(state.name, state.id);
+        final path =
+            await WorkspaceService().defaultProjectDirectory(state.name, state.id);
+        projectDir = Directory(path);
       }
 
-      if (outputPath == null) return false; // User cancelled
+      await serializer.writeProjectDirectory(
+        state,
+        projectDir,
+        existingInfo: _lgdfInfo,
+      );
 
-      await File(outputPath).writeAsBytes(bytes);
-
-      _currentFilePath = outputPath;
+      _currentFilePath = projectDir.path;
       _isDirty = false;
       clearAutoSaveCache();
       ref.invalidate(workspaceProjectsProvider);
-      AppLogger.i('Project saved to: $outputPath');
+      AppLogger.i('Project saved to: ${projectDir.path}');
       return true;
     } catch (e) {
       AppLogger.e('Failed to save project', e);
@@ -273,23 +288,49 @@ class ProjectNotifier extends Notifier<Project> {
     }
   }
 
-  /// Exports a portable .zap copy without changing the workspace project.
-  /// Returns true on success; false when the user cancels or the export fails.
+  /// Returns the project directory when the current project has one.
+  Future<Directory?> _currentProjectDir() async {
+    final path = _currentFilePath;
+    if (path == null) return null;
+    final dir = Directory(path);
+    return await dir.exists() ? dir : null;
+  }
+
+  /// Exports the current project as a portable `.lgdf` archive (plus a
+  /// `.sha256` companion) without changing the workspace project.
+  ///
+  /// Returns true on success; false when the user cancels or export fails.
   Future<bool> exportProject() async {
     try {
-      final bytes = await ProjectSerializer().serialize(state);
+      final serializer = const ProjectSerializer();
+
       if (kIsWeb) {
-        ProjectSerializer().downloadArchive(bytes, '${state.name}${AppConstants.projectExtension}');
+        final bytes = await serializer.serialize(state);
+        serializer.downloadArchive(
+          bytes,
+          '${Lgdf.slugify(state.name)}${Lgdf.extension}',
+        );
         return true;
       }
+
+      // Prefer packing the on-disk project so `work/`-style exclusions apply;
+      // fall back to an in-memory conversion for never-saved projects.
+      final dir = await _currentProjectDir() ?? await _stageTempProject();
+      if (dir == null) return false;
+
+      final bytes = await serializer.packProjectDirectory(dir);
+      final fileName = '${Lgdf.slugify(state.name)}${Lgdf.extension}';
       final outputPath = await FilePicker.platform.saveFile(
         dialogTitle: 'menu.file.exportProject'.tr(),
-        fileName: '${state.name}${AppConstants.projectExtension}',
+        fileName: fileName,
         type: FileType.custom,
-        allowedExtensions: ['zap'],
+        allowedExtensions: ['lgdf'],
       );
       if (outputPath == null) return false;
+
       await File(outputPath).writeAsBytes(bytes);
+      await _writeChecksumCompanion(outputPath, bytes);
+
       AppLogger.i('Project exported to: $outputPath');
       return true;
     } catch (e) {
@@ -298,60 +339,131 @@ class ProjectNotifier extends Notifier<Project> {
     }
   }
 
-  /// Exports a copy of a workspace project file to a user-chosen location
-  /// without opening it. Returns true on success.
+  /// Writes the `<package>.sha256` companion required by the standard.
+  Future<void> _writeChecksumCompanion(String archivePath, Uint8List bytes) async {
+    try {
+      final digest = Lgdf.sha256Hex(bytes);
+      final name = archivePath.replaceAll('\\', '/').split('/').last;
+      await File('$archivePath.sha256').writeAsString('$digest  $name\n');
+    } catch (e) {
+      // A missing companion must not fail an otherwise good export.
+      AppLogger.w('Could not write .sha256 companion: $e');
+    }
+  }
+
+  /// Materializes the in-memory project into a temp directory for packing.
+  Future<Directory?> _stageTempProject() async {
+    try {
+      final temp = await Directory.systemTemp.createTemp('zenith_export_');
+      await const ProjectSerializer()
+          .writeProjectDirectory(state, temp, existingInfo: _lgdfInfo);
+      return temp;
+    } catch (e) {
+      AppLogger.e('Could not stage project for export', e);
+      return null;
+    }
+  }
+
+  /// Exports a workspace entry (LGDF project directory or legacy archive) to a
+  /// user-chosen `.lgdf` path without opening it. Returns true on success.
   Future<bool> exportWorkspaceFile(String path) async {
     try {
-      final file = File(path);
-      if (!await file.exists()) return false;
-      final name = file.uri.pathSegments.last;
+      final serializer = const ProjectSerializer();
+      final type = await FileSystemEntity.type(path);
+
+      Uint8List bytes;
+      String baseName;
+      if (type == FileSystemEntityType.directory) {
+        final dir = Directory(path);
+        bytes = await serializer.packProjectDirectory(dir);
+        baseName = dir.uri.pathSegments.lastWhere(
+          (s) => s.isNotEmpty,
+          orElse: () => 'project',
+        );
+      } else if (type == FileSystemEntityType.file) {
+        final file = File(path);
+        final name = file.uri.pathSegments.last;
+        // Already an archive — copy it through unchanged.
+        bytes = await file.readAsBytes();
+        baseName = name.toLowerCase().endsWith(Lgdf.extension)
+            ? name.substring(0, name.length - Lgdf.extension.length)
+            : (name.toLowerCase().endsWith('.zap')
+                ? name.substring(0, name.length - 4)
+                : name);
+      } else {
+        return false;
+      }
+
       final outputPath = await FilePicker.platform.saveFile(
         dialogTitle: 'menu.file.exportProject'.tr(),
-        fileName: name,
+        fileName: '$baseName${Lgdf.extension}',
         type: FileType.custom,
-        allowedExtensions: ['zap'],
+        allowedExtensions: ['lgdf'],
       );
       if (outputPath == null) return false;
-      await File(outputPath).writeAsBytes(await file.readAsBytes());
-      AppLogger.i('Workspace file exported to: $outputPath');
+
+      await File(outputPath).writeAsBytes(bytes);
+      await _writeChecksumCompanion(outputPath, bytes);
+      AppLogger.i('Workspace entry exported to: $outputPath');
       return true;
     } catch (e) {
-      AppLogger.e('Workspace file export failed', e);
+      AppLogger.e('Workspace export failed', e);
       return false;
     }
   }
 
-  /// Deletes a project file from the workspace. Returns true on success.
+  /// Deletes a project from the workspace. Returns true on success.
   Future<bool> deleteWorkspaceFile(String path) async {
     try {
       await WorkspaceService().deleteProject(path);
       ref.invalidate(workspaceProjectsProvider);
-      AppLogger.i('Workspace file deleted: $path');
+      AppLogger.i('Workspace entry deleted: $path');
       return true;
     } catch (e) {
-      AppLogger.e('Workspace file delete failed', e);
+      AppLogger.e('Workspace delete failed', e);
       return false;
     }
   }
 
-  /// Loads a workspace project file. Returns true on success.
+  /// Loads a workspace entry (LGDF project directory or legacy archive).
+  /// Returns true on success.
   Future<bool> openWorkspaceProject(String path) async {
     try {
-      final bytes = await File(path).readAsBytes();
-      final serialized = await ProjectSerializer().deserialize(bytes);
-      if (serialized == null) return false;
-      await _loadSerialized(serialized);
-      _currentFilePath = path;
-      _isDirty = false;
-      AppLogger.i('Workspace project loaded: $path');
-      return true;
+      final type = await FileSystemEntity.type(path);
+
+      if (type == FileSystemEntityType.directory) {
+        final serialized = await const ProjectSerializer()
+            .readProjectDirectory(Directory(path));
+        if (serialized == null) return false;
+        await _loadSerialized(serialized);
+        _currentFilePath = path;
+        _isDirty = false;
+        AppLogger.i('Workspace project loaded: $path');
+        return true;
+      }
+
+      if (type == FileSystemEntityType.file) {
+        final bytes = await File(path).readAsBytes();
+        final serialized = await const ProjectSerializer().deserialize(bytes);
+        if (serialized == null) return false;
+        await _loadSerialized(serialized);
+        // A legacy single-file project stays read-only until saved, which
+        // converts it into an LGDF project directory in the workspace.
+        _currentFilePath = null;
+        _isDirty = true;
+        AppLogger.i('Archive project loaded: $path');
+        return true;
+      }
+
+      return false;
     } catch (e) {
       AppLogger.e('Failed to load workspace project', e);
       return false;
     }
   }
 
-  /// Picks a .zap file and loads it. Returns true when a project was loaded.
+  /// Picks an `.lgdf` (or legacy `.zap`) project archive and loads it.
+  /// Returns true when a project was loaded.
   Future<bool> openProject() async {
     _pushUndo();
     _isDirty = false;
@@ -361,7 +473,7 @@ class ProjectNotifier extends Notifier<Project> {
 
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['zap'],
+        allowedExtensions: AppConstants.projectOpenExtensions,
       );
 
       if (result == null || result.files.isEmpty) return false;
@@ -370,48 +482,60 @@ class ProjectNotifier extends Notifier<Project> {
 
       Uint8List bytes;
       if (kIsWeb) {
-        bytes = file.bytes!;
+        final webBytes = file.bytes;
+        if (webBytes == null) return false;
+        bytes = webBytes;
       } else if (file.path != null) {
         bytes = await File(file.path!).readAsBytes();
-        _currentFilePath = file.path;
       } else {
         return false;
       }
 
-      final serializer = ProjectSerializer();
-      final serialized = await serializer.deserialize(bytes);
+      final serialized = await const ProjectSerializer().deserialize(bytes);
       if (serialized == null) {
         AppLogger.e('Failed to deserialize project');
         return false;
       }
 
-      final audioService = ref.read(audioServiceProvider);
-      await audioService.unloadAll();
-
-      final updatedTracks = serialized.project.tracks.map((t) {
-        if (t.type == TrackType.audio) {
-          final audioPath = serialized.trackAudioFiles[t.id];
-          return audioPath != null ? t.copyWith(audioFilePath: audioPath) : t;
-        }
-        return t;
-      }).toList();
-      state = serialized.project.copyWith(tracks: updatedTracks);
-
-      for (final track in state.tracks) {
-        if (track.type == TrackType.audio && track.audioFilePath != null) {
-          audioService.loadTrack(track).then((dur) {
-            final updated = track.copyWith(duration: dur);
-            state = state.copyWith(
-              tracks: state.tracks.map((t) => t.id == track.id ? updated : t).toList(),
-            );
-          });
-        }
-      }
-
+      await _loadSerialized(serialized);
+      // An opened archive is not yet a workspace project: saving will create
+      // the LGDF directory for it.
+      _currentFilePath = null;
+      _isDirty = true;
       AppLogger.i('Project loaded: ${state.name}');
       return true;
     } catch (e) {
       AppLogger.e('Failed to open project', e);
+      return false;
+    }
+  }
+
+  /// Picks an existing LGDF project *folder* and loads it.
+  /// Returns true when a project was loaded.
+  Future<bool> openProjectFolder() async {
+    _pushUndo();
+    _isDirty = false;
+    stopAutoSave();
+    try {
+      final path = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'workspace.openFolder'.tr(),
+      );
+      if (path == null) return false;
+
+      final serialized =
+          await const ProjectSerializer().readProjectDirectory(Directory(path));
+      if (serialized == null) {
+        AppLogger.e('Selected folder is not an LGDF project: $path');
+        return false;
+      }
+
+      await _loadSerialized(serialized);
+      _currentFilePath = path;
+      _isDirty = false;
+      AppLogger.i('Project folder loaded: $path');
+      return true;
+    } catch (e) {
+      AppLogger.e('Failed to open project folder', e);
       return false;
     }
   }
@@ -683,6 +807,7 @@ class ProjectNotifier extends Notifier<Project> {
     stopAutoSave();
     await ref.read(audioServiceProvider).unloadAll();
     _currentFilePath = null;
+    _lgdfInfo = null;
     state = Project(id: _uuid.v4(), name: 'Untitled');
     AppLogger.i('New project created');
   }
