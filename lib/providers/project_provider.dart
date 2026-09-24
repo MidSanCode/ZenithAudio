@@ -16,6 +16,8 @@ import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
 import '../services/audio_service.dart';
 import '../services/project_serializer.dart';
+import '../services/workspace_service.dart';
+import 'workspace_provider.dart';
 import '../services/synth_engine.dart' show TrackCompressorParams;
 import 'settings_provider.dart';
 
@@ -229,7 +231,8 @@ class ProjectNotifier extends Notifier<Project> {
 
   // ──── Save / Open ────
 
-  Future<void> saveProject() async {
+  /// Saves the project into the app workspace. Returns true on success.
+  Future<bool> saveProject() async {
     try {
       AppLogger.i('Saving project...');
 
@@ -242,69 +245,114 @@ class ProjectNotifier extends Notifier<Project> {
         final webSerializer = ProjectSerializer();
         webSerializer.downloadArchive(bytes, '${state.name}${AppConstants.projectExtension}');
         AppLogger.i('Project saved via browser download');
-        return;
+        return true;
       }
 
-      // Resolve output path
+      // Projects are saved into the application's workspace. Export uses a
+      // separate command so a copy can be sent elsewhere without moving it.
       String? outputPath;
       if (_currentFilePath != null && await File(_currentFilePath!).exists()) {
         outputPath = _currentFilePath;
       } else {
-        try {
-          if (Platform.isAndroid || Platform.isIOS) {
-            // On Android/iOS, pass bytes directly so FilePicker writes via ContentResolver
-            outputPath = await FilePicker.platform.saveFile(
-              dialogTitle: 'menu.file.saveProject'.tr(),
-              fileName: '${state.name}${AppConstants.projectExtension}',
-              type: FileType.custom,
-              allowedExtensions: ['zap'],
-              bytes: bytes,
-            );
-          } else {
-            outputPath = await FilePicker.platform.saveFile(
-              dialogTitle: 'menu.file.saveProject'.tr(),
-              fileName: '${state.name}${AppConstants.projectExtension}',
-              type: FileType.custom,
-              allowedExtensions: ['zap'],
-            );
-          }
-        } catch (e) {
-          AppLogger.e('File picker error', e);
-          return;
-        }
+        outputPath = await WorkspaceService().defaultProjectPath(state.name, state.id);
       }
 
-      if (outputPath == null) return; // User cancelled
+      if (outputPath == null) return false; // User cancelled
 
-      if (Platform.isIOS) {
-        // On iOS with bytes param, file is already written by the picker.
-        // If the path is somehow unwritable, fall back to app docs.
-        if (!await File(outputPath).exists()) {
-          try {
-            await File(outputPath).writeAsBytes(bytes);
-          } catch (e) {
-            AppLogger.w('iOS save to picker path failed, using app docs: $e');
-            final dir = await getApplicationDocumentsDirectory();
-            outputPath = '${dir.path}/${state.name}${AppConstants.projectExtension}';
-            await File(outputPath).writeAsBytes(bytes);
-          }
-        }
-      } else if (!Platform.isAndroid) {
-        // Desktop: write directly
-        await File(outputPath).writeAsBytes(bytes);
-      }
-      // On Android/iOS with bytes param, file is already written by the picker
+      await File(outputPath).writeAsBytes(bytes);
 
       _currentFilePath = outputPath;
       _isDirty = false;
       clearAutoSaveCache();
+      ref.invalidate(workspaceProjectsProvider);
       AppLogger.i('Project saved to: $outputPath');
+      return true;
     } catch (e) {
       AppLogger.e('Failed to save project', e);
+      return false;
     }
   }
 
-  Future<void> openProject() async {
+  /// Exports a portable .zap copy without changing the workspace project.
+  /// Returns true on success; false when the user cancels or the export fails.
+  Future<bool> exportProject() async {
+    try {
+      final bytes = await ProjectSerializer().serialize(state);
+      if (kIsWeb) {
+        ProjectSerializer().downloadArchive(bytes, '${state.name}${AppConstants.projectExtension}');
+        return true;
+      }
+      final outputPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'menu.file.exportProject'.tr(),
+        fileName: '${state.name}${AppConstants.projectExtension}',
+        type: FileType.custom,
+        allowedExtensions: ['zap'],
+      );
+      if (outputPath == null) return false;
+      await File(outputPath).writeAsBytes(bytes);
+      AppLogger.i('Project exported to: $outputPath');
+      return true;
+    } catch (e) {
+      AppLogger.e('Project export failed', e);
+      return false;
+    }
+  }
+
+  /// Exports a copy of a workspace project file to a user-chosen location
+  /// without opening it. Returns true on success.
+  Future<bool> exportWorkspaceFile(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return false;
+      final name = file.uri.pathSegments.last;
+      final outputPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'menu.file.exportProject'.tr(),
+        fileName: name,
+        type: FileType.custom,
+        allowedExtensions: ['zap'],
+      );
+      if (outputPath == null) return false;
+      await File(outputPath).writeAsBytes(await file.readAsBytes());
+      AppLogger.i('Workspace file exported to: $outputPath');
+      return true;
+    } catch (e) {
+      AppLogger.e('Workspace file export failed', e);
+      return false;
+    }
+  }
+
+  /// Deletes a project file from the workspace. Returns true on success.
+  Future<bool> deleteWorkspaceFile(String path) async {
+    try {
+      await WorkspaceService().deleteProject(path);
+      ref.invalidate(workspaceProjectsProvider);
+      AppLogger.i('Workspace file deleted: $path');
+      return true;
+    } catch (e) {
+      AppLogger.e('Workspace file delete failed', e);
+      return false;
+    }
+  }
+
+  /// Loads a workspace project file. Returns true on success.
+  Future<bool> openWorkspaceProject(String path) async {
+    try {
+      final bytes = await File(path).readAsBytes();
+      final serialized = await ProjectSerializer().deserialize(bytes);
+      if (serialized == null) return false;
+      await _loadSerialized(serialized);
+      _currentFilePath = path;
+      _isDirty = false;
+      AppLogger.i('Workspace project loaded: $path');
+      return true;
+    } catch (e) {
+      AppLogger.e('Failed to load workspace project', e);
+      return false;
+    }
+  }
+
+  /// Picks a .zap file and loads it. Returns true when a project was loaded.
+  Future<bool> openProject() async {
     _pushUndo();
     _isDirty = false;
     stopAutoSave();
@@ -316,7 +364,7 @@ class ProjectNotifier extends Notifier<Project> {
         allowedExtensions: ['zap'],
       );
 
-      if (result == null || result.files.isEmpty) return;
+      if (result == null || result.files.isEmpty) return false;
 
       final file = result.files.single;
 
@@ -327,14 +375,14 @@ class ProjectNotifier extends Notifier<Project> {
         bytes = await File(file.path!).readAsBytes();
         _currentFilePath = file.path;
       } else {
-        return;
+        return false;
       }
 
       final serializer = ProjectSerializer();
       final serialized = await serializer.deserialize(bytes);
       if (serialized == null) {
         AppLogger.e('Failed to deserialize project');
-        return;
+        return false;
       }
 
       final audioService = ref.read(audioServiceProvider);
@@ -361,8 +409,10 @@ class ProjectNotifier extends Notifier<Project> {
       }
 
       AppLogger.i('Project loaded: ${state.name}');
+      return true;
     } catch (e) {
       AppLogger.e('Failed to open project', e);
+      return false;
     }
   }
 

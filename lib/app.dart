@@ -6,7 +6,7 @@ import 'core/theme/app_theme.dart';
 import 'core/utils/logger.dart';
 import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
-import 'screens/editor_screen.dart';
+import 'screens/workspace_screen.dart';
 
 class ZenithAudioApp extends ConsumerStatefulWidget {
   const ZenithAudioApp({super.key});
@@ -73,7 +73,9 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
       localizationsDelegates: context.localizationDelegates,
       supportedLocales: context.supportedLocales,
       locale: context.locale,
-      home: const EditorScreen(),
+      // The app opens on the workspace home screen (recent projects, new/open)
+      // and pushes the editor on top of it once a project is loaded.
+      home: const WorkspaceScreen(),
     );
   }
 }

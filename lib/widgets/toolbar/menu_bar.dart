@@ -33,6 +33,17 @@ class AudioMenuBar extends ConsumerWidget {
             label: 'menu.file'.tr(),
             items: [
               MenuItem(
+                label: 'menu.file.workspace'.tr(),
+                onTap: () async {
+                  final navigator = Navigator.of(context);
+                  if (!navigator.canPop()) return;
+                  // Ask about unsaved changes before leaving the editor.
+                  final ok = await ref.read(projectProvider.notifier).confirmDiscard(context);
+                  if (ok) navigator.pop();
+                },
+              ),
+              MenuItem.separator(),
+              MenuItem(
                 label: 'menu.file.newProject'.tr(),
                 shortcut: 'shortcut.newProject'.tr(),
                 onTap: () async {
@@ -58,8 +69,11 @@ class AudioMenuBar extends ConsumerWidget {
               ),
               MenuItem.separator(),
               MenuItem(
-                label: 'menu.file.exportMix'.tr(),
-                shortcut: 'shortcut.exportMix'.tr(),
+                label: 'menu.file.exportProject'.tr(),
+                shortcut: 'shortcut.exportProject'.tr(),
+                onTap: () async {
+                  await ref.read(projectProvider.notifier).exportProject();
+                },
               ),
               MenuItem.separator(),
               MenuItem(
