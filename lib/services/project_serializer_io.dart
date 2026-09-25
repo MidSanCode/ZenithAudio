@@ -219,6 +219,26 @@ class ProjectSerializer {
     return Uint8List.fromList(encoded);
   }
 
+  /// Unpacks a `.zaproj` archive into [targetDir], replacing its contents.
+  ///
+  /// The target directory is cleared first; the archive's relative paths are
+  /// restored verbatim (with a zip-slip guard).
+  Future<void> unpackProjectArchive(Uint8List bytes, Directory targetDir) async {
+    final archive = ZipDecoder().decodeBytes(bytes.toList());
+
+    if (await targetDir.exists()) await targetDir.delete(recursive: true);
+    await targetDir.create(recursive: true);
+
+    for (final file in archive.files) {
+      if (!file.isFile) continue;
+      final rel = Lgdf.normalizePath(file.name);
+      if (rel.startsWith('..') || rel.startsWith('/')) continue; // zip-slip guard
+      final dest = File('${targetDir.path}/$rel');
+      await dest.create(recursive: true);
+      await dest.writeAsBytes(file.content.toList());
+    }
+  }
+
   /// Serializes a [Project] into `.lgdf` archive bytes via a temporary
   /// directory-mode project.
   Future<Uint8List> serialize(

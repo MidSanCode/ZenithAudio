@@ -9,8 +9,12 @@ import '../core/constants/app_constants.dart';
 import '../core/constants/app_config.dart';
 import '../core/utils/theme_colors.dart';
 import '../providers/project_provider.dart';
+import '../providers/sync_provider.dart';
 import '../providers/workspace_provider.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/workspace_service.dart';
+import '../widgets/sync/sync_settings_dialog.dart';
+import '../widgets/sync/sync_status.dart';
 import 'about_dialog.dart' as app;
 import 'editor_screen.dart';
 import 'settings_page.dart';
@@ -75,6 +79,11 @@ class _WorkspaceTopBar extends ConsumerWidget {
             ),
           ),
           const Spacer(),
+          _TopBarAction(
+            icon: Icons.cloud_outlined,
+            tooltip: 'sync.title'.tr(),
+            onTap: () => SyncSettingsDialog.show(context),
+          ),
           _TopBarAction(
             icon: Icons.tune_outlined,
             tooltip: 'menu.file.settings'.tr(),
@@ -434,6 +443,40 @@ class _ProjectCard extends ConsumerStatefulWidget {
 
 class _ProjectCardState extends ConsumerState<_ProjectCard> {
   bool _hovered = false;
+  bool _syncing = false;
+
+  /// Slug used for the cloud copy — the workspace folder name.
+  String get _slug => widget.file.name;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresh this project's cloud status once, in the background.
+    if (widget.file.isDirectory) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref
+            .read(syncStateProvider.notifier)
+            .refreshStatus(widget.file.path, _slug);
+      });
+    }
+  }
+
+  Future<void> _sync() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    try {
+      await syncProjectWithConflictResolution(
+        context,
+        ref,
+        projectPath: widget.file.path,
+        slug: _slug,
+        displayName: widget.file.label,
+      );
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
 
   Future<void> _open() async {
     final ok = await ref.read(projectProvider.notifier).openWorkspaceProject(widget.file.path);
@@ -492,6 +535,18 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
         '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
   }
 
+  /// Sync status chip; only visible when a cloud provider is configured.
+  Widget _syncBadge() {
+    final configured = ref.watch(
+      syncConfigProvider.select((c) => (c.value?.isComplete) ?? false),
+    );
+    if (!configured) return const SizedBox.shrink();
+    final record = ref.watch(
+      syncStateProvider.select((m) => m.value?[_slug]),
+    );
+    return SyncStatusBadge(status: record?.status ?? SyncStatus.notSynced);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -533,12 +588,22 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
                           color: cs.primary.withAlpha(_hovered ? 200 : 110),
                         ),
                       ),
-                      if (_hovered)
+                       if (_hovered)
                         Positioned(
                           top: 4,
                           right: 4,
                           child: Row(
                             children: [
+                              if (widget.file.isDirectory)
+                                _CardAction(
+                                  icon: _syncing
+                                      ? Icons.sync_rounded
+                                      : Icons.cloud_upload_outlined,
+                                  tooltip: 'sync.action'.tr(),
+                                  onTap: _sync,
+                                ),
+                              if (widget.file.isDirectory)
+                                const SizedBox(width: 2),
                               _CardAction(
                                 icon: Icons.file_upload_outlined,
                                 tooltip: 'workspace.export'.tr(),
@@ -564,15 +629,22 @@ class _ProjectCardState extends ConsumerState<_ProjectCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      widget.file.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: cs.onSurface,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.file.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: cs.onSurface,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (widget.file.isDirectory) _syncBadge(),
+                      ],
                     ),
                     const SizedBox(height: 3),
                     Text(
