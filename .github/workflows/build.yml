@@ -27,6 +27,10 @@ on:
         description: 'Web'
         type: boolean
         default: false
+      publish_release:
+        description: '发布为 Releases'
+        type: boolean
+        default: false
 
 jobs:
   windows:
@@ -128,9 +132,13 @@ jobs:
         run: flutter pub get
       - name: Build
         run: flutter build macos --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
-      - run: |
+      # 只打包 <项目名>.app（ditto 保留 .app 内的符号链接与元数据）
+      - name: Package .app
+        run: |
           cd build/macos/Build/Products/Release
-          zip -r ../../../../../zenith-audio-macos-${{ env.BUILD_NAME }}.zip .
+          APP=$(find . -maxdepth 1 -name '*.app' | head -n 1)
+          echo "Packaging $APP"
+          ditto -c -k --keepParent "$APP" "../../../../../zenith-audio-macos-${{ env.BUILD_NAME }}.zip"
           cd -
       - uses: actions/upload-artifact@v4
         with:
@@ -271,3 +279,74 @@ jobs:
         with:
           name: zenith-audio-Web
           path: zenith-audio-web-${{ env.BUILD_NAME }}.zip
+
+  # 汇总所有构建产物并发布 GitHub Release。
+  # 标题与 tag 均为「版本号+构建号」（如 1.0.0+1）；
+  # Release 里已存在的同名资产会被跳过（支持同一版本重复构建续传）。
+  release:
+    needs: [windows, linux, macos, android, ios, web]
+    if: >-
+      always() &&
+      inputs.publish_release &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      contains(needs.*.result, 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        run: |
+          VER=$(grep '^version:' pubspec.yaml | cut -d' ' -f2)
+          BUILD_NAME=$(echo "$VER" | cut -d'+' -f1)
+          BUILD_NUMBER=$(echo "$VER" | cut -d'+' -f2)
+          echo "BUILD_NAME=$BUILD_NAME" >> $GITHUB_ENV
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$BUILD_NAME+$BUILD_NUMBER" >> $GITHUB_ENV
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Rename generic asset names
+        run: |
+          set -e
+          # APK / IPA 的默认产物名不带版本，重命名成带版本号的发布资产名。
+          find artifacts -type f -name 'app-release.apk' -exec sh -c 'mv -v "$1" "${1%/*}/zenith-audio-android-'"$BUILD_NAME"'.apk"' _ {} \;
+          find artifacts -type f -name '*.ipa' -exec sh -c 'mv -v "$1" "${1%/*}/zenith-audio-ios-'"$BUILD_NAME"'.ipa"' _ {} \;
+          # 把各目录里的文件收拢到一层，便于统一上传。
+          mkdir -p release-assets
+          find artifacts -type f -exec mv -v {} release-assets/ \;
+          ls -la release-assets
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="$RELEASE_TAG"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists — appending assets"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --target "$GITHUB_SHA" \
+              --generate-notes
+          fi
+
+          # 已存在的同名资产 → 跳过
+          EXISTING=$(gh release view "$TAG" --json assets --jq '.assets[].name' || true)
+
+          UPLOADED=0
+          SKIPPED=0
+          for f in release-assets/*; do
+            NAME=$(basename "$f")
+            if echo "$EXISTING" | grep -qx "$NAME"; then
+              echo "Skip (exists): $NAME"
+              SKIPPED=$((SKIPPED+1))
+              continue
+            fi
+            echo "Upload: $NAME"
+            gh release upload "$TAG" "$f"
+            UPLOADED=$((UPLOADED+1))
+          done
+          echo "Uploaded $UPLOADED asset(s), skipped $SKIPPED asset(s)"
