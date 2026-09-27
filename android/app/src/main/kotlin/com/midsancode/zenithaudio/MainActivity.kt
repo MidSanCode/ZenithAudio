@@ -1,4 +1,4 @@
-package io.qzz.luolingy.zenithaudio
+﻿package com.midsancode.zenithaudio
 
 import io.flutter.embedding.android.FlutterActivity
 
