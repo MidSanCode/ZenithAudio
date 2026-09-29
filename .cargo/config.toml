@@ -1,0 +1,22 @@
+# Cargo configuration for the ZENITH AUDIO Rust core.
+#
+# `hook/build.dart` passes `--target <triple>` explicitly, so these settings
+# only apply to manual `cargo` invocations during development.
+
+[build]
+# Keep build artifacts inside the repo so `flutter clean` and CI caching can
+# both reason about one directory.
+target-dir = "target"
+
+[target.wasm32-unknown-unknown]
+# The WASM build is what keeps the core portable to the web build. `getrandom`
+# and friends must not reach for a JS shim unless we opt in; the core avoids
+# randomness and clocks by design (see PLAN_DAW_PARITY.md §0.2), so a plain
+# build is enough.
+rustflags = []
+
+[alias]
+# Convenience aliases used by the CI workflow and by developers.
+lint = "clippy --all-targets -- -D warnings"
+core-test = "test -p zenith_core"
+core-build = "build -p zenith_core --release"

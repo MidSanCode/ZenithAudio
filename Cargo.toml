@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["native/zenith_core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/PAKIKNOWLEDGE/zenith_audio"
+
+[workspace.dependencies]
+zenith_core = { path = "native/zenith_core" }
+
+# Release profile tuned for a DSP core: the audio thread is latency-critical,
+# and LTO is what lets the inner sample loops inline across module boundaries.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

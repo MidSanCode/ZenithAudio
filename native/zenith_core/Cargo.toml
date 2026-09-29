@@ -1,0 +1,18 @@
+[package]
+name = "zenith_core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ZENITH AUDIO native DSP / sequencer / plugin core (C ABI over dart:ffi)"
+
+[lib]
+name = "zenith_core"
+# staticlib: linked into the Flutter desktop runner at build time.
+# cdylib:    loaded dynamically by plugin hosts and the WASM/dev path.
+# rlib:      lets the crate's own unit/integration tests link it normally.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+
+[dev-dependencies]

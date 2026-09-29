@@ -47,6 +47,13 @@ dependencies:
   crypto: ^3.0.7
   shared_preferences: ^2.3.4
   window_manager: ^0.4.3
+
+  # Native-assets plumbing for the Rust core (`hook/build.dart`). These are
+  # regular dependencies because the build hook imports them, not just
+  # dev_dependencies — hooks_runner resolves the hook's imports from the
+  # package's normal dependency set.
+  code_assets: ^1.2.1
+  hooks: ^2.0.2
 dependency_overrides:
   media_kit:
     git:
