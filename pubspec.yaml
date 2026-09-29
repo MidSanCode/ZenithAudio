@@ -54,6 +54,11 @@ dependencies:
   # package's normal dependency set.
   code_assets: ^1.2.1
   hooks: ^2.0.2
+
+  # String decoding across the C ABI (`Pointer<Utf8>.toDartString`). Already
+  # present transitively, but the FFI bindings import it directly so it must be
+  # a direct dependency rather than an accident of resolution.
+  ffi: ^2.1.3
 dependency_overrides:
   media_kit:
     git:

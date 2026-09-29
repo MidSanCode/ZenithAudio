@@ -791,14 +791,14 @@ lib/plugins/
 
 | 阶段 | 状态 | 负责人 | 完成日期 | 备注 |
 |---|---|---|---|---|
-| S0 基础重构 | ⬜ 未开始 | Agent-0 | — | 含 Rust 工作区骨架 |
+| S0 基础重构 | ✅ 已完成 | Agent-0 | 2026-09-30 | 含 Rust 工作区骨架；见 `docs/stages/s0-report.md`。0 error / 99 测试 / clippy 干净 / windows 构建链接 `zenith_core.dll` 成功 |
 | S1 Rust 音频核心 | ⬜ 未开始 | Agent-A | — | ★关键路径，含 WASM 目标 |
 | S1.5 Web 接入与降级 | ⬜ 未开始 | Agent-B | — | 警告条 + 主动停用重型渲染 |
 | S2 参数/自动化 | ⬜ 未开始 | Agent-C | — | |
 | S3 混音器 | ⬜ 未开始 | Agent-D | — | |
 | S4 渲染/导出/PDC | ⬜ 未开始 | Agent-A | — | |
 | S5 效果器套件 | ⬜ 未开始 | Agent-C | — | |
-| S6 编曲/卷帘/MIDI | 🟡 进行中（⛔ 验证受阻） | Agent-E | — | 模型层已落地，见 `docs/stages/s6-report.md` §3 |
+| S6 编曲/卷帘/MIDI | 🟡 进行中（模型层已验证） | Agent-E | — | 模型层已落地；S0 修复了其 tick 重构遗留的编译阻断，现 `flutter test` 99/99 通过。见 `docs/stages/s6-report.md` §3 |
 | S7 插件宿主 | ⬜ 未开始 | Agent-D | — | 桌面限定 |
 | S8 音频编辑 | ⬜ 未开始 | Agent-F | — | |
 | S9 收尾 | ⬜ 未开始 | Agent-F | — | |
