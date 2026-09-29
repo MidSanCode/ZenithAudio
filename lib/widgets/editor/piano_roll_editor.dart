@@ -855,7 +855,13 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
     final pitch = _yToPitch(localPos.dy);
     final t = _snapTime(_xToTime(localPos.dx));
     if (t.isNaN || t.isInfinite) return;
-    final newNote = Note(pitch: pitch, startTime: t, duration: 0.5, velocity: 100);
+    final newNote = Note.fromSeconds(
+      pitch: pitch,
+      startTime: t,
+      duration: 0.5,
+      velocity: 100,
+      bpm: project.bpm,
+    );
     final updated = List<Note>.from(track.notes)
       ..add(newNote)
       ..sort((a, b) => a.startTime.compareTo(b.startTime));

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../core/constants/app_config.dart';
 import '../core/constants/app_constants.dart';
 import '../models/note.dart';
+import '../models/pattern.dart';
+import '../models/playlist.dart';
 import '../models/project.dart';
 import '../models/track.dart';
 import 'lgdf_format.dart';
@@ -43,7 +45,8 @@ class LgdfProjectCodec {
       'bpm': _num(project.bpm),
       'playback_speed': _num(project.playbackSpeed),
       'tracks': [
-        for (final t in project.tracks) buildTrack(t, trackAssetPaths),
+        for (final t in project.tracks)
+          buildTrack(t, trackAssetPaths, bpm: project.bpm),
       ],
     };
   }
@@ -52,7 +55,11 @@ class LgdfProjectCodec {
   static num _num(double value) =>
       value == value.roundToDouble() ? value.toInt() : value;
 
-  Map<String, dynamic> buildTrack(Track t, Map<String, String> trackAssetPaths) {
+  Map<String, dynamic> buildTrack(
+    Track t,
+    Map<String, String> trackAssetPaths, {
+    double bpm = 120.0,
+  }) {
     return {
       'id': t.id,
       'name': t.name,
@@ -69,11 +76,19 @@ class LgdfProjectCodec {
         'notes': t.notes.map(buildNote).toList(),
       if (t.stepPattern.isNotEmpty) 'step_pattern': t.stepPattern,
       if (t.compressor != null) 'compressor': t.compressor!.toJson(),
+      // S0 optional extension slots (S3/S6 fill these in).
+      if (t.mixerChannelId != null) 'mixer_channel_id': t.mixerChannelId,
+      if (t.sends != null) 'sends': t.sends,
+      if (t.automation != null) 'automation': t.automation,
     };
   }
 
   Map<String, dynamic> buildNote(Note n) => {
         'pitch': n.pitch,
+        // Ticks are authoritative; the seconds shadow field is written for one
+        // version cycle so older readers keep working unchanged.
+        'start_ticks': n.startTicks,
+        'length_ticks': n.lengthTicks,
         'start_time': _num(n.startTime),
         'duration': _num(n.duration),
         'velocity': n.velocity,
@@ -221,22 +236,31 @@ class LgdfProjectCodec {
 
     final timeSig = doc['time_signature'] as Map<String, dynamic>?;
     final tracksJson = doc['tracks'] as List<dynamic>? ?? [];
+    final bpm = (doc['bpm'] as num?)?.toDouble() ?? 120;
 
     return Project(
       id: doc['project_id'] as String? ?? '',
       name: doc['name'] as String? ?? AppConstants.untitledProjectName,
-      tracks:
-          tracksJson.map((j) => parseTrack(j as Map<String, dynamic>)).toList(),
+      tracks: tracksJson
+          .map((j) => parseTrack(j as Map<String, dynamic>, bpm: bpm))
+          .toList(),
       sampleRate: (doc['sample_rate'] as num?)?.toDouble() ?? 44100,
       timeSignatureNumerator: (timeSig?['numerator'] as num?)?.toInt() ?? 4,
       timeSignatureDenominator: (timeSig?['denominator'] as num?)?.toInt() ?? 4,
       keySignature: doc['key_signature'] as String? ?? 'C',
-      bpm: (doc['bpm'] as num?)?.toDouble() ?? 120,
+      bpm: bpm,
       playbackSpeed: (doc['playback_speed'] as num?)?.toDouble() ?? 1.0,
+      patterns: (doc['patterns'] as List<dynamic>?)
+              ?.map((e) => Pattern.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      playlist: doc['playlist'] == null
+          ? null
+          : Playlist.fromJson(doc['playlist'] as Map<String, dynamic>),
     );
   }
 
-  Track parseTrack(Map<String, dynamic> t) {
+  Track parseTrack(Map<String, dynamic> t, {double bpm = 120}) {
     final typeStr = t['type'] as String? ?? 'audio';
     final type = TrackType.values.firstWhere(
       (e) => e.name == typeStr,
@@ -249,7 +273,7 @@ class LgdfProjectCodec {
       instrumentName: t['instrument_name'] as String?,
       notes: t['notes'] != null
           ? (t['notes'] as List<dynamic>)
-              .map((n) => parseNote(n as Map<String, dynamic>))
+              .map((n) => parseNote(n as Map<String, dynamic>, bpm: bpm))
               .toList()
           : const [],
       volume: (t['volume'] as num?)?.toDouble() ?? 0.8,
@@ -267,15 +291,35 @@ class LgdfProjectCodec {
           ? TrackCompressorParams.fromJson(
               t['compressor'] as Map<String, dynamic>)
           : null,
+      mixerChannelId: t['mixer_channel_id'] as String?,
+      sends: (t['sends'] as List<dynamic>?)?.cast<Map<String, dynamic>>(),
+      automation: (t['automation'] as List<dynamic>?)
+          ?.cast<Map<String, dynamic>>(),
     );
   }
 
-  Note parseNote(Map<String, dynamic> n) => Note(
+  Note parseNote(Map<String, dynamic> n, {double bpm = 120.0}) {
+    // New documents carry `start_ticks` / `length_ticks`; older ones only have
+    // seconds, which are converted through the project tempo.
+    final startTicks = (n['start_ticks'] as num?)?.toInt();
+    final lengthTicks = (n['length_ticks'] as num?)?.toInt();
+    if (startTicks != null && lengthTicks != null) {
+      return Note(
         pitch: (n['pitch'] as num?)?.toInt() ?? 60,
-        startTime: (n['start_time'] as num?)?.toDouble() ?? 0,
-        duration: (n['duration'] as num?)?.toDouble() ?? 1,
+        startTicks: startTicks,
+        lengthTicks: lengthTicks,
         velocity: (n['velocity'] as num?)?.toInt() ?? 100,
+        bpm: bpm,
       );
+    }
+    return Note.fromSeconds(
+      pitch: (n['pitch'] as num?)?.toInt() ?? 60,
+      startTime: (n['start_time'] as num?)?.toDouble() ?? 0,
+      duration: (n['duration'] as num?)?.toDouble() ?? 1,
+      velocity: (n['velocity'] as num?)?.toInt() ?? 100,
+      bpm: bpm,
+    );
+  }
 
   /// Parses a legacy `.zap` info.json (camelCase keys, tracks inline).
   Project parseLegacyInfo(Map<String, dynamic> info) {
@@ -285,6 +329,7 @@ class LgdfProjectCodec {
     }
 
     final tracksJson = info['tracks'] as List<dynamic>? ?? [];
+    final legacyBpm = (info['bpm'] as num?)?.toDouble() ?? 120;
     final tracks = tracksJson.map((j) {
       final t = j as Map<String, dynamic>;
       final typeStr = t['type'] as String? ?? 'audio';
@@ -299,7 +344,8 @@ class LgdfProjectCodec {
         instrumentName: t['instrumentName'] as String?,
         notes: (type == TrackType.instrument || type == TrackType.synth)
             ? ((t['notes'] as List<dynamic>?)
-                    ?.map((n) => parseNote(n as Map<String, dynamic>))
+                    ?.map((n) =>
+                        parseNote(n as Map<String, dynamic>, bpm: legacyBpm))
                     .toList() ??
                 [])
             : const [],

@@ -1,8 +1,8 @@
-import 'musical_time.dart';
-import 'note.dart';
-import 'pattern.dart';
-import 'playlist.dart';
-import 'track.dart';
+import '../models/musical_time.dart';
+import '../models/note.dart';
+import '../models/pattern.dart';
+import '../models/playlist.dart';
+import '../models/track.dart';
 
 /// Thrown when an operation would create an invalid arrangement.
 class PlaylistException implements Exception {

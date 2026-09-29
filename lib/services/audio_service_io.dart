@@ -178,14 +178,17 @@ class AudioService {
         ? (track.computedDuration + 0.5).clamp(0.0, maxDur).toDouble()
         : 2.0;
     final sampleRate = 44100;
+    // The seconds view of every note was derived at the project tempo; reuse
+    // it so the decode side reconstructs the same tick positions.
+    final bpm = track.notes.isEmpty ? 120.0 : track.notes.first.bpm;
 
     final Uint8List wav;
     if (useIsolate) {
-      final params = _jobParams(track, dur, sampleRate);
+      final params = _jobParams(track, dur, sampleRate, bpm: bpm);
       final bank = SoundFontService.instance.bank;
       wav = await Isolate.run(() => _synthAndEncodeWav(params, bank));
     } else {
-      wav = _synthAndEncodeWav(_jobParams(track, dur, sampleRate),
+      wav = _synthAndEncodeWav(_jobParams(track, dur, sampleRate, bpm: bpm),
           SoundFontService.instance.bank);
     }
 
@@ -213,7 +216,8 @@ class AudioService {
 
   /// Serialize a track into the parameter map consumed by
   /// [_synthAndEncodeWav] (isolate-safe: plain JSON types only).
-  Map<String, dynamic> _jobParams(Track track, double dur, int sampleRate) {
+  Map<String, dynamic> _jobParams(Track track, double dur, int sampleRate,
+      {double bpm = 120.0}) {
     final inst = InstrumentPreset.fromId(track.instrumentName!);
     return <String, dynamic>{
       'notes': track.notes.map((n) => {
@@ -225,6 +229,7 @@ class AudioService {
       'instrument': _presetToMap(inst),
       'duration': dur,
       'sampleRate': sampleRate,
+      'bpm': bpm,
       'compressor': track.compressor?.enabled == true
           ? track.compressor!.toJson()
           : null,
@@ -577,13 +582,15 @@ Uint8List _synthAndEncodeWav(Map<String, dynamic> params,
   final compJson = params['compressor'] as Map<String, dynamic>?;
 
   final inst = _presetFromMap(instMap);
+  final bpm = (params['bpm'] as num?)?.toDouble() ?? 120.0;
   final notes = notesData.map((nd) {
     final m = nd as Map<String, dynamic>;
-    return Note(
+    return Note.fromSeconds(
       startTime: (m['startTime'] as num).toDouble(),
       duration: (m['duration'] as num).toDouble(),
       pitch: m['pitch'] as int,
       velocity: m['velocity'] as int,
+      bpm: bpm,
     );
   }).toList();
 

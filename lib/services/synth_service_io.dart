@@ -56,7 +56,8 @@ class SynthService {
     final tail = inst.envCurve != null ? 0.5 : 0.3;
     final job = SynthRenderJob(
       notes: [
-        Note(pitch: pitch, startTime: 0, duration: duration, velocity: velocity),
+        Note.fromSeconds(
+            pitch: pitch, startTime: 0, duration: duration, velocity: velocity),
       ],
       instrument: inst,
       totalDuration: duration + tail,

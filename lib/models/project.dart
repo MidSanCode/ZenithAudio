@@ -1,4 +1,6 @@
 import 'dart:math';
+import 'pattern.dart';
+import 'playlist.dart';
 import 'track.dart';
 
 class Project {
@@ -13,6 +15,16 @@ class Project {
   final double bpm;
   final double playbackSpeed;
 
+  // ── S0 optional extension slots ──
+  // Populated by S6; null/empty in older projects, which keeps them readable.
+
+  /// Patterns referenced by [playlist]. Empty for legacy projects whose notes
+  /// still live directly on their tracks.
+  final List<Pattern> patterns;
+
+  /// Arrangement layer. null for legacy projects.
+  final Playlist? playlist;
+
   const Project({
     required this.id,
     required this.name,
@@ -23,7 +35,12 @@ class Project {
     this.keySignature = 'C',
     this.bpm = 120,
     this.playbackSpeed = 1.0,
+    this.patterns = const [],
+    this.playlist,
   });
+
+  /// True when the project carries the Pattern + Playlist arrangement layer.
+  bool get hasArrangement => patterns.isNotEmpty || playlist != null;
 
   double get duration =>
       tracks.fold<double>(0, (m, t) => max(t.computedDuration, m));
@@ -44,6 +61,8 @@ class Project {
     String? keySignature,
     double? bpm,
     double? playbackSpeed,
+    List<Pattern>? patterns,
+    Playlist? playlist,
   }) {
     return Project(
       id: id ?? this.id,
@@ -57,6 +76,8 @@ class Project {
       keySignature: keySignature ?? this.keySignature,
       bpm: bpm ?? this.bpm,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
+      patterns: patterns ?? this.patterns,
+      playlist: playlist ?? this.playlist,
     );
   }
 

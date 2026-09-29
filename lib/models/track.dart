@@ -23,6 +23,19 @@ class Track {
   /// Per-track compressor (instrument tracks; null = disabled).
   final TrackCompressorParams? compressor;
 
+  // ── S0 optional extension slots ──
+  // Reserved for later stages; absent in older projects and never required.
+  // All are plain JSON so they round-trip without a schema bump.
+
+  /// Mixer channel this track feeds (S3). null = derive one channel per track.
+  final String? mixerChannelId;
+
+  /// Send configuration (S3): one entry per send slot.
+  final List<Map<String, dynamic>>? sends;
+
+  /// Automation lanes attached to this track (S2).
+  final List<Map<String, dynamic>>? automation;
+
   /// True for note-based tracks (instrument or synth) — they carry notes +
   /// an instrumentName preset and render through the synth pipeline.
   bool get isInstrument =>
@@ -43,6 +56,9 @@ class Track {
     this.duration = 0,
     this.stepPattern = const [],
     this.compressor,
+    this.mixerChannelId,
+    this.sends,
+    this.automation,
   });
 
   double get computedDuration {
@@ -68,6 +84,9 @@ class Track {
     double? duration,
     List<bool>? stepPattern,
     TrackCompressorParams? compressor,
+    String? mixerChannelId,
+    List<Map<String, dynamic>>? sends,
+    List<Map<String, dynamic>>? automation,
   }) {
     return Track(
       id: id ?? this.id,
@@ -84,6 +103,9 @@ class Track {
       duration: duration ?? this.duration,
       stepPattern: stepPattern ?? this.stepPattern,
       compressor: compressor ?? this.compressor,
+      mixerChannelId: mixerChannelId ?? this.mixerChannelId,
+      sends: sends ?? this.sends,
+      automation: automation ?? this.automation,
     );
   }
 

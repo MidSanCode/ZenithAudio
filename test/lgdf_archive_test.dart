@@ -32,7 +32,10 @@ void main() {
             name: 'Lead',
             type: TrackType.synth,
             instrumentName: 'square',
-            notes: const [Note(pitch: 60, startTime: 0.5, duration: 1)],
+            notes: [
+              Note.fromSeconds(
+                  pitch: 60, startTime: 0.5, duration: 1, bpm: 100),
+            ],
           ),
           if (audio != null)
             Track(

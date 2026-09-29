@@ -1,8 +1,32 @@
+import '../models/musical_time.dart';
 import '../models/note.dart';
 
 /// Chord / progression generation service.
 class ChordService {
   ChordService._();
+
+  /// Tempo used when a caller does not supply one; matches the project
+  /// reference tempo so legacy call sites keep their exact behaviour.
+  static const double defaultBpm = 120.0;
+
+  /// Builds a note from a seconds position/length, converting through [bpm].
+  static Note _note({
+    required int pitch,
+    required double startTime,
+    required double duration,
+    required int velocity,
+    required double bpm,
+  }) {
+    final startTicks = Ticks.fromSeconds(startTime, bpm);
+    final endTicks = Ticks.fromSeconds(startTime + duration, bpm);
+    return Note(
+      pitch: pitch,
+      startTicks: startTicks,
+      lengthTicks: (endTicks - startTicks).clamp(1, 1 << 30),
+      velocity: velocity,
+      bpm: bpm,
+    );
+  }
 
   /// Chord type → semitone offsets from the chord root.
   static const Map<String, List<int>> chordTypes = {
@@ -82,6 +106,7 @@ class ChordService {
     int velocity = 100,
     int inversion = 0,
     List<int>? shapeOverride,
+    double bpm = defaultBpm,
   }) {
     final intervals = shapeOverride ?? chordTypes[type] ?? chordTypes['maj']!;
     final rootMidi = 12 * (octave + 1) + rootPc;
@@ -97,11 +122,12 @@ class ChordService {
       pitches[idx] = lowest + 12;
     }
     return pitches
-        .map((p) => Note(
+        .map((p) => _note(
               pitch: p.clamp(12, 108),
               startTime: startTime,
               duration: duration,
               velocity: velocity,
+              bpm: bpm,
             ))
         .toList();
   }
@@ -125,6 +151,7 @@ class ChordService {
     int octave = 4,
     String? chordTypeOverride,
     int velocity = 96,
+    double bpm = defaultBpm,
   }) {
     final steps = progressions[progressionId] ?? progressions['pop']!;
     final out = <Note>[];
@@ -145,6 +172,7 @@ class ChordService {
           startTime: start,
           duration: chordDur,
           velocity: velocity,
+          bpm: bpm,
         ));
       }
     }
@@ -159,6 +187,7 @@ class ChordService {
     required double duration,
     int velocity = 100,
     String patternId = 'block',
+    double bpm = defaultBpm,
   }) {
     return _patternNotes(
       patternId: patternId,
@@ -168,6 +197,7 @@ class ChordService {
       startTime: startTime,
       duration: duration,
       velocity: velocity,
+      bpm: bpm,
     );
   }
 
@@ -179,6 +209,7 @@ class ChordService {
     required double startTime,
     required double duration,
     required int velocity,
+    double bpm = defaultBpm,
   }) {
     final intervals = chordTypes[type] ?? chordTypes['maj']!;
     final rootMidi = 12 * (octave + 1) + rootPc;
@@ -194,11 +225,12 @@ class ChordService {
         final stepDur = duration / seq.length;
         return [
           for (int i = 0; i < seq.length; i++)
-            Note(
+            _note(
               pitch: seq[i].clamp(12, 108),
               startTime: startTime + i * stepDur,
               duration: stepDur * 0.95,
               velocity: velocity,
+              bpm: bpm,
             ),
         ];
       case 'alberti':
@@ -210,39 +242,43 @@ class ChordService {
         final stepDur = duration / pattern.length;
         return [
           for (int i = 0; i < pattern.length; i++)
-            Note(
+            _note(
               pitch: pattern[i].clamp(12, 108),
               startTime: startTime + i * stepDur,
               duration: stepDur * 0.9,
               velocity: velocity,
+              bpm: bpm,
             ),
         ];
       case 'strum':
         const strumGap = 0.03;
         return [
           for (int i = 0; i < pitches.length; i++)
-            Note(
+            _note(
               pitch: pitches[i].clamp(12, 108),
               startTime: startTime + i * strumGap,
               duration: duration - i * strumGap,
               velocity: velocity,
+              bpm: bpm,
             ),
         ];
       case 'bassChord':
         final notes = <Note>[
-          Note(
+          _note(
             pitch: rootMidi.clamp(12, 108),
             startTime: startTime,
             duration: duration,
             velocity: velocity + 10 > 127 ? 127 : velocity + 10,
+            bpm: bpm,
           ),
         ];
         for (int i = 1; i < n; i++) {
-          notes.add(Note(
+          notes.add(_note(
             pitch: (rootMidi + intervals[i]).clamp(12, 108),
             startTime: startTime,
             duration: duration,
             velocity: velocity - 16 < 40 ? 40 : velocity - 16,
+            bpm: bpm,
           ));
         }
         return notes;
@@ -250,11 +286,12 @@ class ChordService {
       default:
         return [
           for (final p in pitches)
-            Note(
+            _note(
               pitch: p.clamp(12, 108),
               startTime: startTime,
               duration: duration,
               velocity: velocity,
+              bpm: bpm,
             ),
         ];
     }
@@ -275,7 +312,8 @@ class ChordService {
       {required int keyRootPc,
       required String mode,
       required String patternId,
-      int velocity = 84}) {
+      int velocity = 84,
+      double bpm = defaultBpm}) {
     final out = <Note>[];
     for (final step in plan) {
       final rootSemi = degreeToSemitone(step.degree, mode: mode);
@@ -288,6 +326,7 @@ class ChordService {
         startTime: step.start,
         duration: step.duration,
         velocity: velocity,
+        bpm: bpm,
       ));
     }
     return out;

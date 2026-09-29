@@ -182,7 +182,10 @@ void main() {
           name: 'Lead',
           type: TrackType.synth,
           instrumentName: 'saw-lead',
-          notes: [Note(pitch: pitch, startTime: 0, duration: 1)],
+          notes: [
+            Note.fromSeconds(
+                pitch: pitch, startTime: 0, duration: 1, bpm: 120),
+          ],
         ),
       ],
     );

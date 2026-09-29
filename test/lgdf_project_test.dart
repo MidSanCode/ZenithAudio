@@ -21,7 +21,7 @@ void main() {
     if (await tempRoot.exists()) await tempRoot.delete(recursive: true);
   });
 
-  Project buildProject() => const Project(
+  Project buildProject() => Project(
         id: 'proj-1234',
         name: 'My Song',
         sampleRate: 44100,
@@ -36,8 +36,10 @@ void main() {
             type: TrackType.synth,
             instrumentName: 'saw-lead',
             notes: [
-              Note(pitch: 40, startTime: 0, duration: 1.5, velocity: 100),
-              Note(pitch: 43, startTime: 1.5, duration: 0.5, velocity: 90),
+              Note.fromSeconds(
+                  pitch: 40, startTime: 0, duration: 1.5, velocity: 100, bpm: 128),
+              Note.fromSeconds(
+                  pitch: 43, startTime: 1.5, duration: 0.5, velocity: 90, bpm: 128),
             ],
           ),
           Track(
@@ -45,7 +47,10 @@ void main() {
             name: 'Drums',
             type: TrackType.instrument,
             instrumentName: 'kit',
-            notes: [Note(pitch: 36, startTime: 0, duration: 0.25)],
+            notes: [
+              Note.fromSeconds(
+                  pitch: 36, startTime: 0, duration: 0.25, bpm: 128),
+            ],
           ),
         ],
       );
