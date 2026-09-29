@@ -1,0 +1,19 @@
+CreateFile failed 5 (¾Ü¾ø·ÃÎÊ¡£
+)
+ProcessException: æ‹’ç»è®¿é—®ã€‚ (at ../../runtime/bin/process_win.cc:742)
+  Command: F:\flutter_sdk\flutter\bin\cache\dart-sdk\bin\dartaotruntime.exe F:\flutter_sdk\flutter\bin\cache\dart-sdk\bin\snapshots\analysis_server_aot.dart.snapshot --client-id=dart-analyze --disable-server-feature-completion --disable-server-feature-search --disable-status-notification-debouncing --disable-silent-analysis-exceptions --sdk F:\flutter_sdk\flutter\bin\cache\dart-sdk
+#0      _ProcessImpl._start (dart:io-patch/process_patch.dart:411)
+#1      Process.start (dart:io-patch/process_patch.dart:42)
+#2      AnalysisServer._startProcess (package:dartdev/src/analysis_server.dart:229)
+#3      AnalysisServer.start (package:dartdev/src/analysis_server.dart:118)
+#4      AnalyzeCommand.run (package:dartdev/src/commands/analyze.dart:239)
+#5      CommandRunner.runCommand (package:args/command_runner.dart:236)
+#6      DartdevRunner.runCommand (package:dartdev/dartdev.dart:288)
+#7      CommandRunner.run.<anonymous closure> (package:args/command_runner.dart:146)
+#8      new Future.sync (dart:async/future.dart:325)
+#9      CommandRunner.run (package:args/command_runner.dart:146)
+#10     runDartdev (package:dartdev/dartdev.dart:51)
+#11     main (file:///C:/b/s/w/ir/x/w/sdk/pkg/dartdev/bin/dartdev.dart:13)
+#12     _delayEntrypointInvocation.<anonymous closure> (dart:isolate-patch/isolate_patch.dart:309)
+#13     _RawReceivePort._handleMessage (dart:isolate-patch/isolate_patch.dart:192)
+

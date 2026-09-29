@@ -798,7 +798,7 @@ lib/plugins/
 | S3 混音器 | ⬜ 未开始 | Agent-D | — | |
 | S4 渲染/导出/PDC | ⬜ 未开始 | Agent-A | — | |
 | S5 效果器套件 | ⬜ 未开始 | Agent-C | — | |
-| S6 编曲/卷帘/MIDI | ⬜ 未开始 | Agent-E | — | |
+| S6 编曲/卷帘/MIDI | 🟡 进行中（⛔ 验证受阻） | Agent-E | — | 模型层已落地，见 `docs/stages/s6-report.md` §3 |
 | S7 插件宿主 | ⬜ 未开始 | Agent-D | — | 桌面限定 |
 | S8 音频编辑 | ⬜ 未开始 | Agent-F | — | |
 | S9 收尾 | ⬜ 未开始 | Agent-F | — | |
