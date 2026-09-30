@@ -74,6 +74,7 @@
 | `cargo test --lib mixer` | ✅ **149 passed / 0 failed**（106 核心 + 39 FFI + 4 类型布局） |
 | `cargo test --lib`（全 crate） | ⚠️ **315 passed / 1 failed** — 唯一失败为 `automation::tests::advance_block_does_not_allocate`，位于 **Agent-C 的 `automation/**`**，本阶段未触碰该目录 |
 | `cargo check --lib` | ✅ exit 0 |
+| `cargo check --target wasm32-unknown-unknown --lib` | ✅ **exit 0** — ABI 原则 **P7** 硬约束（核心须可编译到 WASM）在本阶段仍然成立 |
 | `flutter analyze` | ❌ **未取得**（见 §5） |
 | `flutter test` | ❌ **未取得**（见 §5） |
 
@@ -85,9 +86,18 @@
 
 ### 5.1 Dart 门禁未能取得（环境限制，非代码问题）
 
-`flutter analyze` 与 `flutter test` 均**超过 600 秒未返回**。排查确认原因为**本机被并行会话的 Rust 构建打满**：多次观测到 7–8 个 `rustc` 进程同时运行，最严重时连 `Get-Process` 都超时。已排除代码自身原因（`dart analyze` 同样超时，且未产出任何诊断）。
+`flutter analyze` 与 `flutter test` 均**超过 600 秒未返回**。排查确认原因为**本机被并行会话的 Rust 构建打满**：
 
-**请勿据此判定 Dart 侧已通过。** 在机器空闲时需补跑：
+* 多次观测到 **4–8 个 `rustc` 进程同时运行**；
+* 最严重时连 `Get-Process` 这类轻量查询都超时；
+* **决定性证据**：`dart --version` 本身在 180 秒内也未能返回——Dart 工具链在此负载下**根本无法启动**，这与被测代码无关；
+* 两个后台任务曾长时间显示 running，但实际**不存在任何 `dart` / `flutter` 进程**，输出文件为 0 字节。
+
+已排除代码自身原因（分析器未产出任何诊断信息）。**请勿据此判定 Dart 侧已通过。**
+
+作为**有限度的**替代核查，已确认 5 个 Dart 文件的大括号计数完全配平（`mixer_model.dart` 57/57、`mixer_migration.dart` 43/43、`mixer_strip.dart` 43/43；另两个文件在剥离字符串与注释后也配平）。这**不能替代**分析器，仅能排除最粗劣的结构性错误。
+
+机器空闲时需补跑：
 
 ```
 flutter analyze lib/mixer lib/widgets/mixer test/mixer_model_test.dart
