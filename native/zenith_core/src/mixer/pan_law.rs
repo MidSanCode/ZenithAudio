@@ -74,16 +74,10 @@ impl PanLaw {
                 // folding to mono is exactly transparent. This needs its own
                 // shaping rule — a constant-power curve scaled down is a
                 // different law, not this one.
-                //
-                //   left(t)  = cos(t·π/2)
-                //   right(t) = sin(t·π/2)
-                //
-                // shaped so that centre lands on `centre_gain` and the fold
-                // `left + right` is preserved at unity.
                 let s = sin_half_pi(t);
                 let c = cos_half_pi(t);
-                let peak = self.centre_gain() * core::f32::consts::SQRT_2; // == 0.7088…/√2·√2
-                // Normalise the pair so it sums to the -6 dB fold of 1.0.
+                // Renormalise the sin/cos pair so its sum is exactly 1.0
+                // rather than 1/√2 at centre, giving `l + r == 1` everywhere.
                 let sum = s + c;
                 let norm = if sum > 0.0 { 1.0 / sum } else { 0.0 };
                 (c * norm, s * norm)
