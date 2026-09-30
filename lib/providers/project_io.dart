@@ -37,7 +37,7 @@ extension ProjectIo on ProjectNotifier {
   }
 
   Future<void> _loadSerialized(SerializedProject serialized) async {
-    await ref.read(audioServiceProvider).unloadAll();
+    await ref.read(audioEngineProvider).unloadAll();
     _lgdfInfo = serialized.lgdfInfo;
     final updatedTracks = serialized.project.tracks.map((t) {
       if (t.type == TrackType.audio) {
@@ -50,7 +50,7 @@ extension ProjectIo on ProjectNotifier {
     _isDirty = true;
     for (final track in state.tracks) {
       if (track.type == TrackType.audio && track.audioFilePath != null) {
-        ref.read(audioServiceProvider).loadTrack(track).then((dur) {
+        ref.read(audioEngineProvider).loadTrack(track).then((dur) {
           final updated = track.copyWith(duration: dur);
           state = state.copyWith(
             tracks:

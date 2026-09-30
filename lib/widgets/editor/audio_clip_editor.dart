@@ -14,7 +14,7 @@ import '../../models/track.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../layout/floating_window.dart';
-import '../../services/audio_service.dart';
+import '../../engine/audio_engine_adapter.dart';
 import '../../services/audio_converter.dart';
 import '../../services/fft_service.dart';
 import '../../services/audio_processing_service.dart';
@@ -405,7 +405,7 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
 
   Future<void> _startPlayback() async {
     if (_clip == null) return;
-    final audio = ref.read(audioServiceProvider);
+    final audio = ref.read(audioEngineProvider);
     await audio.unloadAll();
 
     // Generate a WAV for the current clip
@@ -427,12 +427,12 @@ class _AudioClipEditorState extends ConsumerState<AudioClipEditor> {
       _safeSetState(() => _isPlaying = false);
     };
 
-    await audio.play();
+    await audio.playFromCurrentPosition();
     _safeSetState(() => _isPlaying = true);
   }
 
   void _stopPlayback() {
-    ref.read(audioServiceProvider).stop();
+    ref.read(audioEngineProvider).stop();
     _safeSetState(() {
       _isPlaying = false;
       _playheadSec = 0;

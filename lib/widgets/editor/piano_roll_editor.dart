@@ -16,7 +16,7 @@ import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/synth_service.dart';
-import '../../services/audio_service.dart';
+import '../../engine/audio_engine_adapter.dart';
 import '../../widgets/editor/chord_generator_dialog.dart';
 import '../../core/constants/app_constants.dart';
 
@@ -498,7 +498,7 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
     if (_disposed) return;
 
     _stopPreview();
-    final audio = ref.read(audioServiceProvider);
+    final audio = ref.read(audioEngineProvider);
     await audio.loadTrackFromPath(previewId, filePath, volume: 1.0);
     if (_disposed) return;
     _previewTrackId = previewId;
@@ -510,7 +510,7 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
 
   void _stopPreview() {
     if (_previewTrackId != null) {
-      ref.read(audioServiceProvider).stopAndUnloadTrack(_previewTrackId!);
+      ref.read(audioEngineProvider).stopAndUnloadTrack(_previewTrackId!);
       _previewTrackId = null;
     }
   }

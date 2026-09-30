@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../engine/audio_engine_adapter.dart';
 import '../models/track.dart';
-import '../services/audio_service.dart';
 import 'project_provider.dart';
 import 'settings_provider.dart';
 
@@ -27,7 +27,16 @@ final wavGenerationProgressProvider = StateProvider<double>((ref) => 0.0);
 class PlaybackNotifier extends Notifier<PlaybackState> {
   @override
   PlaybackState build() {
-    final audio = ref.read(audioServiceProvider);
+    // Typed as the adapter, not `AudioEngine`, because this notifier installs
+    // the legacy `onPositionChanged` / `onCompleted` *callbacks*, which the
+    // interface deliberately does not expose (it offers `positionStream`
+    // instead, and the legacy engine also needs `hotSwapTrackWav`).
+    //
+    // The migration target is `audio.positionStream` + `PlaybackRequest`; doing
+    // that here would be a behaviour change, which the S1.0 step forbids. This
+    // is the one notifier that still needs the adapter type, and it is recorded
+    // as such in the S1 report.
+    final audio = ref.read(audioEngineProvider);
     audio.onPositionChanged = (pos) {
       ref.read(playheadPositionProvider.notifier).state = pos;
       final project = ref.read(projectProvider);
@@ -69,7 +78,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
           _swapTimers[t.id]?.cancel();
           _swapTimers.remove(t.id);
           _pendingSwap.remove(t.id);
-          ref.read(audioServiceProvider).stopAndUnloadTrack(t.id);
+          ref.read(audioEngineProvider).stopAndUnloadTrack(t.id);
           continue;
         }
         // Debounce rapid drag edits; the last state after the window wins.
@@ -101,7 +110,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
       if (track == null) return;
       if (state != PlaybackState.playing) return;
       try {
-        await ref.read(audioServiceProvider).hotSwapTrackWav(track);
+        await ref.read(audioEngineProvider).hotSwapTrackWav(track);
       } catch (_) {}
     });
   }
@@ -123,7 +132,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
     _swapTimers.remove(trackId);
     _pendingSwap.remove(trackId);
 
-    final audio = ref.read(audioServiceProvider);
+    final audio = ref.read(audioEngineProvider);
     if (state == PlaybackState.playing && audio.isPlaying) {
       try {
         await audio.hotSwapTrackWav(track);
@@ -134,9 +143,9 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
   }
 
   Future<void> _restart() async {
-    await ref.read(audioServiceProvider).seekTo(0);
+    await ref.read(audioEngineProvider).seekTo(0);
     ref.read(playheadPositionProvider.notifier).state = 0;
-    await ref.read(audioServiceProvider).play();
+    await ref.read(audioEngineProvider).playFromCurrentPosition();
     state = PlaybackState.playing;
   }
 
@@ -145,7 +154,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
   /// generated on a background isolate (non-blocking). Other instrument
   /// tracks show progress while generating.
   Future<void> play({String? editingTrackId}) async {
-    final audio = ref.read(audioServiceProvider);
+    final audio = ref.read(audioEngineProvider);
     final project = ref.read(projectProvider);
 
     await audio.unloadAll();
@@ -220,17 +229,17 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
 
     ref.read(wavGenerationProgressProvider.notifier).state = 1.0;
     audio.setPlaybackSpeed(project.playbackSpeed);
-    await audio.play();
+    await audio.playFromCurrentPosition();
     state = PlaybackState.playing;
   }
 
   Future<void> pause() async {
-    await ref.read(audioServiceProvider).pause();
+    await ref.read(audioEngineProvider).pause();
     state = PlaybackState.paused;
   }
 
   Future<void> stop() async {
-    await ref.read(audioServiceProvider).stop();
+    await ref.read(audioEngineProvider).stop();
     ref.read(playheadPositionProvider.notifier).state = 0;
     state = PlaybackState.stopped;
   }
@@ -244,7 +253,7 @@ class PlaybackNotifier extends Notifier<PlaybackState> {
   }
 
   Future<void> seekTo(double seconds) async {
-    await ref.read(audioServiceProvider).seekTo(seconds);
+    await ref.read(audioEngineProvider).seekTo(seconds);
     ref.read(playheadPositionProvider.notifier).state = seconds;
   }
 }

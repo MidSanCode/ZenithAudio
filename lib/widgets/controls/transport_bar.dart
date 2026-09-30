@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:easy_localization/easy_localization.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/utils/theme_colors.dart';
-import '../../services/audio_service.dart';
+import '../../engine/audio_engine_adapter.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/recording_provider.dart';
@@ -169,7 +169,7 @@ class TransportBar extends ConsumerWidget {
                 min: 0, max: 1,
                 onChanged: (v) {
                   ref.read(masterVolumeProvider.notifier).state = v;
-                  ref.read(audioServiceProvider).masterVolume = v;
+                  ref.read(audioEngineProvider).masterVolume = v;
                 },
               ),
             ),

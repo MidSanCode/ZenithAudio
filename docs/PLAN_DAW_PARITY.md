@@ -844,7 +844,7 @@ lib/plugins/
 | 阶段 | 状态 | 负责人 | 完成日期 | 备注 |
 |---|---|---|---|---|
 | S0 基础重构 | ✅ 已完成 | Agent-0 | 2026-09-30 | 含 Rust 工作区骨架；见 `docs/stages/s0-report.md`。0 error / 99 测试 / clippy 干净 / windows 构建链接 `zenith_core.dll` 成功 |
-| S1 Rust 音频核心 | ⬜ 未开始 | Agent-A | — | ★关键路径，含 WASM 目标 |
+| S1 Rust 音频核心 | 🟡 **S1.0 前置项已完成**（A/B/C），S1.1 主体未开工 | Agent-A | 2026-10-01 | ★关键路径，含 WASM 目标。前置项 A：移除 `panic="abort"` + `guard()` + `zenith_panic_probe` 验收；前置项 B：新增 `lib/engine/audio_engine_adapter.dart`，34 个调用点迁至 `audioEngineProvider`；前置项 C：`AudioService` 保留为回退路径。122 测试全绿 / clippy 干净 / wasm32 通过。见 `docs/stages/s1-report.md` 与 `COORDINATION` C-008 |
 | S1.5 Web 接入与降级 | ⬜ 未开始 | Agent-B | — | 警告条 + 主动停用重型渲染 |
 | S2 参数/自动化 | ⬜ 未开始 | Agent-C | — | |
 | S3 混音器 | ⬜ 未开始 | Agent-D | — | |

@@ -14,7 +14,7 @@ import '../models/note.dart';
 import '../models/instrument.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
-import '../services/audio_service.dart';
+import '../engine/audio_engine_adapter.dart';
 import '../services/lgdf_format.dart';
 import '../services/project_serializer.dart';
 import '../services/workspace_service.dart';
@@ -92,7 +92,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
   @override
   Project build() {
     ref.onDispose(() {
-      ref.read(audioServiceProvider).dispose();
+      ref.read(audioEngineProvider).disposeService();
       _autoSaveTimer?.cancel();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => startAutoSave());
@@ -212,7 +212,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
 
     state = state.copyWith(tracks: [...state.tracks, track]);
     if (audioFilePath != null) {
-      ref.read(audioServiceProvider).loadTrack(track).then((dur) {
+      ref.read(audioEngineProvider).loadTrack(track).then((dur) {
         final updated = track.copyWith(duration: dur);
         state = state.copyWith(
           tracks: state.tracks.map((t) => t.id == track.id ? updated : t).toList(),
@@ -255,7 +255,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
   Future<void> removeTrack(String trackId) async {
     _pushUndo();
     _markDirty();
-    await ref.read(audioServiceProvider).unloadTrack(trackId);
+    await ref.read(audioEngineProvider).unloadTrack(trackId);
     final removedName = state.tracks.firstWhere((t) => t.id == trackId).name;
     state = state.copyWith(
       tracks: state.tracks.where((t) => t.id != trackId).toList(),
@@ -272,7 +272,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
         return t;
       }).toList(),
     );
-    ref.read(audioServiceProvider).updateTrackVolume(trackId, volume);
+    ref.read(audioEngineProvider).updateTrackVolume(trackId, volume);
     AppLogger.d('Track "$trackName" volume: ${(volume * 100).toInt()}%');
   }
 
@@ -320,7 +320,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
         return t;
       }).toList(),
     );
-    ref.read(audioServiceProvider).setMute(trackId, !track.isMuted);
+    ref.read(audioEngineProvider).setMute(trackId, !track.isMuted);
   }
 
   void toggleTrackSolo(String trackId) {
@@ -337,7 +337,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
   }
 
   void _syncVolumes() {
-    final audio = ref.read(audioServiceProvider);
+    final audio = ref.read(audioEngineProvider);
     for (final t in state.tracks) {
       audio.setMute(t.id, !state.shouldTrackPlay(t));
     }
@@ -442,7 +442,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
   void setPlaybackSpeed(double speed) {
     _markDirty();
     state = state.copyWith(playbackSpeed: speed.clamp(0.25, 4.0));
-    ref.read(audioServiceProvider).setPlaybackSpeed(state.playbackSpeed);
+    ref.read(audioEngineProvider).setPlaybackSpeed(state.playbackSpeed);
   }
 
   Future<void> forceNewProject() async {
@@ -450,7 +450,7 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
     _currentFilePath = null;
     _lgdfInfo = null;
     _clearHistory();
-    await ref.read(audioServiceProvider).unloadAll();
+    await ref.read(audioEngineProvider).unloadAll();
     state = Project(id: _uuid.v4(), name: 'untitled');
     _isDirty = false;
     startAutoSave();

@@ -2,10 +2,10 @@ import 'dart:ui' show FontFeature;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:easy_localization/easy_localization.dart';
+import '../../engine/audio_engine_adapter.dart';
 import '../../models/project.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/project_provider.dart';
-import '../../services/audio_service.dart';
 
 /// Song info panel: project metadata, playback position, output format
 /// (sample rate / bitrate) and the active audio device.
@@ -37,7 +37,7 @@ class _SongInfoDialogState extends ConsumerState<SongInfoDialog> {
     final project = ref.watch(projectProvider);
     final playhead = ref.watch(playheadPositionProvider);
     final isPlaying = ref.watch(playbackProvider) == PlaybackState.playing;
-    final out = ref.watch(audioServiceProvider).getOutputInfo();
+    final out = ref.watch(audioEngineProvider).getOutputInfo();
 
     return AlertDialog(
       title: Row(children: [
