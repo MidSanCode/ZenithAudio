@@ -846,8 +846,8 @@ lib/plugins/
 | S0 基础重构 | ✅ 已完成 | Agent-0 | 2026-09-30 | 含 Rust 工作区骨架；见 `docs/stages/s0-report.md`。0 error / 99 测试 / clippy 干净 / windows 构建链接 `zenith_core.dll` 成功 |
 | S1 Rust 音频核心 | 🟡 **S1.0 前置项已完成**（A/B/C），S1.1 主体未开工 | Agent-A | 2026-10-01 | ★关键路径，含 WASM 目标。前置项 A：移除 `panic="abort"` + `guard()` + `zenith_panic_probe` 验收；前置项 B：新增 `lib/engine/audio_engine_adapter.dart`，34 个调用点迁至 `audioEngineProvider`；前置项 C：`AudioService` 保留为回退路径。122 测试全绿 / clippy 干净 / wasm32 通过。见 `docs/stages/s1-report.md` 与 `COORDINATION` C-008 |
 | S1.5 Web 接入与降级 | ⬜ 未开始 | Agent-B | — | 警告条 + 主动停用重型渲染 |
-| S2 参数/自动化 | ⬜ 未开始 | Agent-C | — | |
-| S3 混音器 | ⬜ 未开始 | Agent-D | — | |
+| S2 参数/自动化 | ✅ 已完成 | Agent-C | 2026-10-04 | 参数系统与自动化全量落地：`src/automation/**`（7 模块）+ `ffi/{mod,types,param_api}.rs`，`ABI_VERSION` → `0.2.0`。`cargo test` 268 passed（当时）/ clippy 干净 / wasm32 通过。见 `COORDINATION` C-009 |
+| S3 混音器 | 🟡 **Rust 侧已完成**，Dart 侧待取得门禁结论 | Agent-D | 2026-10-04 | 8 个 Rust 模块（64 插入 + 8 返回 + 1 主控预分配、任意路由、**建图期环路拒绝**、深度上限 4、4 发送、10 插入槽、峰值+RMS+3 秒保持）+ `ffi/mixer_api.rs` + S3 ABI 类型，`ABI_VERSION` → `0.3.0`；Dart 模型/无损迁移/通道条/电平表。`cargo clippy --all-targets -- -D warnings` **exit 0**，mixer 专属测试 **149 passed / 0 failed**。⚠️ `flutter analyze` / `flutter test` 因本机被并行 rustc 构建打满而**超时未取得结论**，详见 `docs/stages/s3-report.md` §5 |
 | S4 渲染/导出/PDC | ⬜ 未开始 | Agent-A | — | |
 | S5 效果器套件 | ⬜ 未开始 | Agent-C | — | |
 | S6 编曲/卷帘/MIDI | 🟡 进行中（模型层已验证） | Agent-E | — | 模型层已落地；S0 修复了其 tick 重构遗留的编译阻断，现 `flutter test` 99/99 通过。见 `docs/stages/s6-report.md` §3 |
