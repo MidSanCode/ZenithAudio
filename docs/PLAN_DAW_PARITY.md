@@ -277,6 +277,58 @@ S0 基础重构（拆分大文件、tick 化、工程格式扩展位、Rust 工�
 
 ### S1 — Rust 实时音频核心（★ 关键路径）
 
+#### S1.0 — 前置项（必须先完成，否则 S1 主体不可回滚）
+
+> 这三项是 S0 交接复核时发现的**真实缺口**（见 `docs/stages/s0-report.md` §9）。
+> 必须在 S1 主体动工**之前**完成，否则 S1 会把「换引擎」与「改 34 个调用点」
+> 搅在一起，出问题时无法二分定位。
+
+**前置项 A：修复 `panic = "abort"` 与 `catch_unwind` 的矛盾** 🔴
+
+- **现状**：`Cargo.toml` 的 `[profile.release]` 写了 `panic = "abort"`，
+  而 `native/zenith_core/src/lib.rs` 的模块文档承诺
+  "every entry point is `catch_unwind`-guarded"。
+  **两者不能共存**——`abort` 下 `catch_unwind` 永远捕获不到东西。
+- **后果**：S1/S5 接上真实 DSP 后，任何一次 `unwrap()` 或越界**不是返回错误码，
+  而是直接 abort 掉宿主进程**，用户正在录的音全部丢失。
+- **动作**：移除 `panic = "abort"`，让 `catch_unwind` 真正生效。
+  （FFI 库的正确做法；`docs/ABI.md` 原则 P4 亦要求如此。）
+- **验收**：写一个故意 panic 的测试导出函数，验证 panic 被捕获并转为错误码，
+  进程存活。
+
+**前置项 B：`AudioEngine` 适配层（消除 34 个静默调用点）** 🔴
+
+- **现状**：`lib/services/audio_service.dart` 是纯转发 barrel，**全仓无 import 点**；
+  但 `audioServiceProvider` 有 **34 个调用点、横跨 8 个文件**
+  （`project_provider` / `project_io` / `playback_provider` / `transport_bar` /
+  `audio_clip_editor` / `song_info_dialog` / `piano_roll_editor` / `audio_service_io`），
+  全部按 `AudioService` 具体类型引用，**没有任何一处使用 S0 新建的 `AudioEngine` 接口**。
+- **后果**：`AudioEngine` 目前**无实现者、无使用者**。S1 若直接换底层，
+  `AudioService` 独有的 `loadTrack` / `hotSwapTrackWav` / `getOutputInfo` /
+  `masterVolume=` 等方法在 `AudioEngine` 上并不存在，
+  34 个调用点会同时报错——改动不可回滚、无法二分。
+- **动作**：新增 `lib/engine/audio_engine_adapter.dart`，实现 `AudioEngine`，
+  内部委托给现有 `AudioService`（**行为完全不变**）；把 34 个调用点逐一迁到适配层。
+  - 第一步：**只搬家不改行为**，`media_kit` 仍在底层跑
+  - 第二步（S1 主体）：把适配层的委托目标从 `AudioService` 换成 FFI 引擎
+  - `AudioService` 独有而 `AudioEngine` 没有的能力（`hotSwapTrackWav`、
+    `getOutputInfo` 等）**先保留在适配层**，不要贸然塞进 `AudioEngine` 接口——
+    它们在新引擎里会以不同形态存在（热替换将随实时引擎一起消失）
+- **验收**：34 个调用点全部改为面向 `AudioEngine`；`flutter test` 全绿；
+  应用行为与改动前**逐项一致**（播放/暂停/定位/音量/静音/独奏/热替换）。
+
+**前置项 C：S1 期间不要物理删除 `AudioService`**
+
+- 前置项 B 完成后，`audio_service_io.dart` 仍是实际实现，**它是唯一的回退路径**。
+  到 S4（离线渲染 + 导出验证通过）再移除 `media_kit`。
+
+> **前置项 B 是 S1 的关键风险控制**：它把一次大爆炸变成两次小爆炸，
+> 且第一次（接口迁移）是纯机械改动、有测试兜底。
+
+---
+
+#### S1.1 — Rust 引擎主体
+
 **目标**：用 **Rust 实时音频引擎**替换 `media_kit` 多播放器方案。
 **一份 Rust 源码，五个平台目标**：
 
@@ -807,29 +859,406 @@ lib/plugins/
 
 ---
 
-## 7. 第一个动作（给下一个会话）
+## 7. 各会话启动提示词（直接复制给对应会话）
 
-**只有 Agent-0 可以先动手**，执行 S0：
+> **使用方式**：每个会话开工前，把对应小节的**整段提示词**复制粘贴给它作为第一条消息。
+> 提示词是**自包含**的——会话不需要读完整份计划也能开工。
+> 括号内的 `<>` 部分按实际情况替换。
+>
+> **通用纪律**（每个会话都适用，提示词里已内嵌）：
+> 1. 先读 `docs/PLAN_DAW_PARITY.md` §0.2（硬性约束）与 `docs/ABI.md`（若涉及跨语言）
+> 2. 提交前必须 `cargo clippy --all-targets -- -D warnings` + `cargo test` +
+>    `flutter analyze` + `flutter test` 四项全绿
+> 3. 不许在代码/注释/文档/UI 文案中出现任何第三方 DAW 品牌名
+> 4. 改 `lib.rs` / `Cargo.toml` / `ffi/` 三个共享文件前，先在 `docs/COORDINATION.md` 登记
+> 5. 完成后写 `docs/stages/sN-report.md` 并更新计划 §6 进度表
 
-1. 读 `lib/services/synth_engine.dart`、`lib/providers/project_provider.dart`、`lib/models/instrument.dart`
-2. 按 3.S0 的清单拆分文件（**纯移动代码，不改逻辑**）
-3. 新增 `models/musical_time.dart` 与 tick 换算
-4. 在 `models/project.dart` / `models/track.dart` 加可选扩展字段
-5. **建立 Rust 工作区骨架**（本次新增，是 S1 的基座）：
-   - `native/zenith_core/Cargo.toml`，`crate-type = ["staticlib", "cdylib", "rlib"]`
-   - `native/zenith_core/src/lib.rs` 放一个最小 `extern "C" fn zenith_version() -> u32`
-   - 建立 `hook/build.dart`（native_assets），驱动 `cargo build`
-   - **验证链路**：`flutter build windows --debug` 能链接并调用该函数
-6. 建立 Dart 侧抽象接口：`lib/engine/engine.dart`、`lib/automation/parameter.dart`、
-   `lib/plugins/plugin_host.dart`（只有接口，无实现）。
-   **效果器不建 Dart 抽象类**——效果器全部实现在 Rust（S5），
-   Dart 侧只通过 FFI 查询参数清单并自动生成 UI。
-7. 跑 `cargo clippy` + `cargo test` + `flutter analyze` + `flutter test`，
-   全绿后提交并打 tag `s0-baseline`
+---
 
-**S0 完成前，其他会话不要开始写代码**——它们都依赖 S0 的接口与 C ABI 契约。
+### 📋 Agent-0（S0 已完成）—— 无需启动
 
-**工具链现状**（已核实）：`rustc 1.96.0` / `cargo 1.96.0` 已安装；
-`build/native_assets/windows/native_assets.json` 存在且为空（`{"native-assets":{}}`），
-可直接接入；CI（`.github/workflows/build.yml`）已覆盖 6 平台，需为各 job 补
-`rustup target add` 步骤。
+S0 已交付并打 tag `s0-baseline`。该会话已结束。
+
+---
+
+### 📋 Agent-A — S1 Rust 音频核心 + S4 离线渲染
+
+```
+你是 Agent-A，负责「卓声」DAW 项目的 S1 阶段：把音频引擎从 media_kit 换为 Rust 实时核心。
+
+工作目录：F:\exeliang\zenith_audio
+必读（按顺序）：
+  1. docs/PLAN_DAW_PARITY.md — 重点读 §0.2 硬性约束、§0.3 技术选型、§3 的 S1 全节
+  2. docs/ABI.md — C ABI 契约（原则 P1–P10 不可违反）
+  3. docs/stages/s0-report.md — 上游交接，特别注意 §9 风险表
+  4. native/zenith_core/src/lib.rs 与 Cargo.toml
+  5. lib/engine/engine.dart（S0 已定义的接口）
+
+S0 现状（已核实）：rustc 1.96 / cargo 1.96 已装；native/zenith_core 骨架存在，
+仅有 3 个版本函数；hook/build.dart 已能真实驱动 cargo build 并把 zenith_core.dll
+打进 build/windows/x64/runner/Debug/；WASM target 可编译；tag s0-baseline 已打。
+
+【第一步：必须先做 S1.0 前置项，做完停下来汇报，不要直接开 S1.1】
+  前置项 A（🔴 必修）：Cargo.toml 的 [profile.release] 写了 panic = "abort"，
+    但 lib.rs 文档承诺每个入口都 catch_unwind 保护。abort 下 catch_unwind 永远
+    捕获不到，一旦 DSP 里有 unwrap/越界就会直接 abort 宿主进程、丢掉用户录音。
+    请移除 panic = "abort"，并写一个会 panic 的测试导出函数验证 panic 被捕获为
+    错误码、进程存活。
+  前置项 B（🔴 必修）：lib/services/audio_service.dart 是纯转发 barrel、全仓无 import
+    点，但 audioServiceProvider 有 34 个调用点横跨 8 个文件，全部按具体类型
+    AudioService 引用，S0 新建的 AudioEngine 接口目前零实现者零使用者。
+    请新增 lib/engine/audio_engine_adapter.dart：实现 AudioEngine、内部委托现有
+    AudioService，行为完全不变；然后把 34 个调用点逐一迁到适配层。
+    AudioService 独有而 AudioEngine 没有的方法（hotSwapTrackWav / getOutputInfo /
+    masterVolume= 等）先留在适配层，不要塞进 AudioEngine 接口。
+    验收：34 个调用点全部面向 AudioEngine，flutter test 全绿，应用行为逐项一致
+    （播放/暂停/定位/音量/静音/独奏/热替换）。
+  前置项 C：S1 期间不要物理删除 audio_service_io.dart，它是唯一回退路径。
+
+【第二步（前置项 B 汇报通过后再做）：S1.1 引擎主体】
+  按 PLAN §3 S1.1 的 crate 结构实现。要点：
+  - 一份 Rust 源码覆盖六平台；用 AudioDriver trait 抽象回调来源
+    （桌面/移动 = cpal，Web = wasm32 + AudioWorklet）
+  - 音频回调路径绝对零分配、零锁、零 IO；用 assert_no_alloc 在测试中强制验证
+  - 每块以传入 n_frames 为准，不得假设固定块大小
+  - 所有 extern "C" 入口 catch_unwind 保护；失败返回错误码，不返回 null
+  - 每个 #[repr(C)] 结构体导出配套 zenith_sizeof_<T>()
+  - 调度的 tick 语义必须与 Dart 侧 lib/models/musical_time.dart（PPQ=960）一致
+  - 锁 256 帧 @48kHz，实测延迟 ≤ 12ms
+  - 每次提交前必须通过 cargo check --target wasm32-unknown-unknown
+
+【硬性约束】
+  - 不引入任何第三方 DAW 品牌名（代码/注释/文档/UI 全不许）
+  - 效果器不在 Dart 建抽象类；效果器实现在 Rust，Dart 侧后续只查参数描述符
+  - 禁止 VST（许可冲突）；插件用 CLAP 或自研 ABI
+  - 改 Cargo.toml / lib.rs / ffi/ 前先在 docs/COORDINATION.md 登记
+  - 合并前四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【注意】S6（Agent-E）正在并行改动 Note / musical_time 的时间语义，
+你实现 sequencer 前先确认其 tick 表示已稳定，避免两边同时改时间模型。
+
+完成后交付 docs/stages/sN-report.md，并更新 PLAN §6 进度表。
+```
+
+---
+
+### 📋 Agent-B — S1.5 Web 端 WASM 接入与降级
+
+```
+你是 Agent-B，负责「卓声」DAW 项目的 S1.5 阶段：Web 端引擎接入 + 卡顿降级策略。
+
+工作目录：F:\exeliang\zenith_audio
+必读：
+  1. docs/PLAN_DAW_PARITY.md — §0.2 硬性约束、§3 的 S1.5 全节、§3 S1（了解驱动抽象）
+  2. docs/ABI.md — C ABI 契约
+  3. lib/engine/engine.dart、lib/services/audio_service_web.dart
+
+【依赖与前置】
+  你依赖 Agent-A 的 S1 完成 driver trait 抽象。开工前先确认
+  native/zenith_core/src/driver/mod.rs 里的 AudioDriver trait 已存在。
+  若 S1 尚未落地，你可以先做不依赖它的部分：
+    - WASM 构建流水线（cargo build --target wasm32-unknown-unknown + wasm-bindgen）
+    - AudioWorklet 的 JS 侧骨架
+    - 卡顿检测的 UI 警告条组件（纯 Dart，可独立完成）
+  但不要自己改 AudioDriver trait——那是 Agent-A 的所有权。
+
+【任务】
+  按 PLAN §3 S1.5：
+  1. Web 复用同一份 Rust 核心，编译为 WASM，经 AudioWorklet 驱动
+     （cpal 在 wasm32 不可用，这是 Web 必须走独立驱动的原因）
+  2. 三级自动降级：
+     - L0 完整：实时率 < 60%，无 xrun
+     - L1 减负：实时率 60–85% 或偶发 xrun → 停用卷积混响、过采样失真、
+       高倍率时间拉伸；降低调制器更新率
+     - L2 精简：实时率 > 85% 或持续 xrun → 停用所有发送/返回总线与实时效果链
+       （转离线烘焙），复音上限降至 32
+  3. 检测逻辑：Rust 侧只写 xrun 计数器与实时率原子量，判断绝不在音频回调内做；
+     Dart 侧每秒轮询一次（Web 经 Worklet postMessage 回传）
+  4. UI：触发阈值时在页面顶部显示持久警告条。要求：
+     - 警告不可自动消失，必须用户确认
+     - 提供「仍要启用」按钮（强制覆盖但保留警告）
+     - 提供「降低采样率 / 增大缓冲」快捷操作
+     - 被停用的功能在所有 UI 面板上置灰并附原因提示
+     - 状态经 web_degradation_provider 暴露
+  5. 降级可逆：性能恢复（连续 10 秒 L0 水平）后可回升一级，但需用户确认
+  6. 桌面/移动同样具备这套监控，只是默认不触发降级
+
+【硬性约束】
+  - 不引入第三方 DAW 品牌名（含 UI 文案）
+  - Rust 核心不得依赖 std::thread / std::fs / std::time::Instant
+    （除 cfg(not(target_arch="wasm32")) 保护的部分）
+  - 改 driver/worklet_driver.rs 与 lib.rs 前先在 docs/COORDINATION.md 登记
+  - 四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【验收】低配浏览器上人为制造负载，警告条正确出现、重型渲染被停用、音频不中断；
+点「仍要启用」后功能恢复且警告保留；Web 与桌面在同一工程 L0 下音质一致
+（容差 < -90dBFS）。
+
+完成后交付 docs/stages/s1.5-report.md 并更新 PLAN §6 进度表。
+```
+
+---
+
+### 📋 Agent-C — S2 参数/自动化 + S5 效果器套件
+
+```
+你是 Agent-C，负责「卓声」DAW 项目的 S2（参数系统与自动化）与 S5（内置效果器套件）。
+
+工作目录：F:\exeliang\zenith_audio
+必读：
+  1. docs/PLAN_DAW_PARITY.md — §0.2 约束、§0.3 选型、§3 的 S2 与 S5 全节
+  2. docs/ABI.md — C ABI 契约（尤其 P5 实时安全、P8 结构体镜像）
+  3. lib/automation/parameter.dart（S0 已定义的 Dart 侧接口）
+  4. native/zenith_core/src/lib.rs
+
+【S2 可以先开工】它主要新增 native/zenith_core/src/automation/ 目录，
+与 Agent-A 的 S1 冲突面小。但注意：
+  - S2 的实时求值需要 S1 的 DSP 图与无锁参数通道；若 S1 未就绪，
+    先做纯逻辑部分（参数注册表、自动化片段数据结构、插值、曲线、录制状态机）
+    并配足单元测试，求值接线等 S1 落地后再补
+
+【任务 S2】按 PLAN §3 S2：
+  - Rust 侧 native/zenith_core/src/automation/：parameter / store / clip / lane /
+    player / modulator / recorder
+  - Dart 侧 lib/automation/：ParameterId 镜像、自动化片段的编辑 UI（绘制、拖拽、
+    曲线张力）、录制模式开关与状态显示
+  - 寻址：Dart 构造 "channel/<id>/volume" 形式，传入 Rust 时映射为紧凑三元组
+    (kind: u16, index: u32, sub: u32)，热路径不做字符串哈希
+  - 求值顺序固定：基础值 → 自动化 → 调制器累加 → 钳制（顺序必须文档化）
+  - 所有参数变更经一阶低通（1–50ms）避免 zipper noise
+  - 录制模式三种：Touch / Latch / Write
+  - 点间插值支持 线性 / 保持 / 曲线（张力 -1..1）
+  - 求值路径零分配；自动化点加载时预排序并建索引
+
+【任务 S5】⚠️ 开工前必须先扩 ABI
+  S0 刻意没有建 Dart 侧效果器抽象（正确决定），代价是：Dart 要「自动生成效果器 UI」，
+  必须能从 Rust 查询参数描述符清单——而 docs/ABI.md 目前只有 3 个版本函数。
+  所以 S5 第一步是先设计并登记 ABI 扩展（如 zenith_effect_describe(idx) ->
+  *const ParamDesc、zenith_effect_count() 等），按 ABI.md §2.2 的兼容规则递增 minor，
+  同步更新 docs/ABI.md 与 Dart 侧绑定。
+  然后按 PLAN §3 S5 实现：
+  - Rust 侧 native/zenith_core/src/effects/：registry + eq(parametric, spectrum) +
+    dynamics(compressor/limiter/gate) + reverb(algorithmic/convolution) +
+    delay(sync_delay) + modulation(chorus/flanger/phaser) +
+    distortion(saturation/bitcrush) + filter(multimode) + util(oversampling)
+  - 统一 trait EffectProcessor：prepare / process / reset / latency_samples /
+    parameters / set_parameter
+  - 每个效果 prepare 阶段一次性预分配所有缓冲（含 IR 与 FFT 暂存），
+    process 内零分配；用 assert_no_alloc 验证
+  - 每个效果配 Rust 单元测试（脉冲 / 白噪声 / 正弦输入）
+  - 热点（EQ、卷积、饱和）用 SIMD，cfg 分平台，wasm32 用 simd128
+  - 过采样统一走 util/oversampling.rs，不许各效果各写一套
+  - latency_samples 必须准确，供 S4 的 PDC 使用
+
+【硬性约束】
+  - 不引入第三方 DAW 品牌名
+  - 禁止 VST；插件用 CLAP 或自研 ABI
+  - 实时路径禁止 Vec::push / Box::new / String / Mutex / println!
+  - 改 lib.rs / Cargo.toml / ffi/ 前先在 docs/COORDINATION.md 登记
+  - 只在自己的子目录（automation/、effects/）内改，避免与 Agent-A/D 冲突
+  - 四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【验收】音量自动化曲线播放正确无 zipper noise；Write 模式能录出自动化点；
+1000 个自动化点求值 < 2% CPU；所有效果 256 帧下零分配；
+128 轨各挂 3 效果实时率 < 50%。
+
+完成后交付 docs/stages/s2-report.md 与 s5-report.md，并更新 PLAN §6 进度表。
+```
+
+---
+
+### 📋 Agent-D — S3 混音器 + S7 插件宿主
+
+```
+你是 Agent-D，负责「卓声」DAW 项目的 S3（混音器）与 S7（插件宿主）。
+
+工作目录：F:\exeliang\zenith_audio
+必读：
+  1. docs/PLAN_DAW_PARITY.md — §0.2 约束、§3 的 S3 与 S7 全节
+  2. docs/ABI.md — C ABI 契约
+  3. lib/providers/mixer_provider.dart（现状：trackFx 只是 Map<String,List<String>>，
+     纯字符串列表、不挂载任何 DSP，这是要被取代的）
+  4. lib/widgets/mixer/mixer_panel.dart
+
+【依赖】S3 依赖 Agent-A 的 S1（DSP 图、AudioBuffer、DspNode trait）。
+  开工前确认 native/zenith_core/src/engine/ 里的图结构与缓冲类型已稳定。
+  若未就绪，先做不依赖的部分：混音器数据模型、路由与环检测算法、
+  序列化/迁移逻辑、Dart 侧混音器 UI 骨架，并配单元测试。
+
+【任务 S3】按 PLAN §3 S3：
+  - Rust 侧 native/zenith_core/src/mixer/：channel / strip / bus / send /
+    effect_chain / meter / pan_law / graph（含环检测）
+  - Dart 侧：混音器 UI（通道条、推子、旋钮、电平表），复用现有
+    lib/widgets/layout/rotary_knob.dart
+  - 通道：默认 64 插入 + 8 返回 + 1 主控，预分配，实时路径不扩容
+  - 路由：任意通道可输出到任意总线/返回，支持分组嵌套深度 ≥ 4，
+    建图时做环检测（成环必须被拒绝）
+  - 每通道 4 个 Send，各自独立开关 + 电平 + 推子前/后
+  - 每通道 10 个效果槽，支持重排、旁通、湿/干、串联
+  - 任意通道可作为任意效果的侧链源
+  - 增益以 dB 显示（-INF..+12dB），推子实现为 dB 曲线而非线性
+  - 每通道 + 主控峰值与 RMS 双表，3 秒峰值保持；Rust 原子写入，Dart 无锁读
+  - 混音器状态写入工程 spec/project.json；旧工程按「每轨 = 一个通道」自动迁移，
+    原音量/声像/静音/独奏必须无损迁移
+
+【任务 S7】⚠️ 桌面限定
+  - 插件 ABI 抽象层 + CLAP 宿主；插件参数桥接到参数存储自动获得自动化；
+    插件延迟桥接到 PDC；插件状态随工程序列化
+  - 沙箱化：插件崩溃不得拖垮宿主（子进程隔离，P1）
+  - 移动与 Web 端不加载外部插件，改用 Agent-C 的 S5 内置效果
+  - 【禁止 VST】许可与项目 AGPL-3.0 冲突，只允许 CLAP 或自研 ABI
+
+【硬性约束】
+  - 不引入第三方 DAW 品牌名
+  - 实时路径禁止 Vec::push / Box::new / String / Mutex / println!
+  - 改 lib.rs / Cargo.toml / ffi/ 前先在 docs/COORDINATION.md 登记
+  - 只在自己的子目录（mixer/、plugins/）内改
+  - 四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【验收】16 通道 + 若干发送/返回播放无爆音无相位问题；环检测正确拒绝成环；
+旧工程音量/声像/静音/独奏无损迁移；assert_no_alloc 通过；
+加载一个 CLAP 插件后参数可自动化、延迟被补偿、预设随工程保存；
+插件崩溃时宿主存活并可移除该插件。
+
+完成后交付 docs/stages/s3-report.md 与 s7-report.md，并更新 PLAN §6 进度表。
+```
+
+---
+
+### 📋 Agent-E — S6 编曲结构 + 钢琴卷帘 + MIDI
+
+```
+你是 Agent-E，负责「卓声」DAW 项目的 S6 阶段：编曲结构、钢琴卷帘、MIDI。
+（该阶段目前状态：🟡 模型层已落地，需要继续推进）
+
+工作目录：F:\exeliang\zenith_audio
+必读：
+  1. docs/PLAN_DAW_PARITY.md — §0.2 约束、§3 的 S6 全节
+  2. docs/stages/s6-report.md（你自己的上游报告）
+  3. docs/stages/s0-report.md §2 — 重要：S0 接手时仓库处于编译不过状态，
+     根因是你上次未完成的 tick 重构（135 个 analyzer error），S0 已修复
+  4. lib/models/pattern.dart、lib/models/playlist.dart、
+     lib/services/playlist_engine.dart、lib/models/musical_time.dart
+
+【当前状态】模型层已落地并通过测试（flutter test 99/99）。
+  Note 已改为 tick-first：startTicks / lengthTicks 为权威，
+  startTime / duration 为派生视图，PPQ = 960。
+
+【任务 S6a — Pattern + Playlist 双层结构】
+  - 确认 pattern.dart / playlist.dart 的模型完整
+  - Playlist 上拖拽摆放样式块；同一 Pattern 多处引用自动同步
+  - Pattern 克隆：linked（共享）/ unique（独立）
+  - 工程格式新增 patterns / playlist 字段；旧工程的 Track.notes 迁移为
+    「一个 Pattern 一条轨道」的等价结构（向后可读不可破坏）
+
+【任务 S6b — 钢琴卷帘增强】
+  - tick 化网格、吸附可选（1/1 … 1/32、三连音）
+  - 量化：强度 0–100%、摇摆比例
+  - 力度：画笔、斜坡、随机、压缩/扩展
+  - 音符工具：画笔、擦除、切片、滑音、静音、选择框
+  - 和弦/音阶辅助：保留并增强现有 lib/services/chord_service.dart 的
+    旋律锚定和声能力（这是本项目的独特优势，不要退化）
+  - 幽灵音符、音阶高亮
+
+【任务 S6c — MIDI】
+  - lib/services/midi/smf_reader.dart 与 smf_writer.dart（SMF 0/1）
+  - MIDI 输入（外部键盘）、输出、时钟同步、通道过滤
+  - 必须替换 lib/widgets/toolbar/menu_bar.dart 里
+    'MIDI import not yet implemented' 的占位实现
+
+【硬性约束】
+  - 不引入第三方 DAW 品牌名
+  - 不破坏现有工程格式：LGDF v2.0 与 .zaproj 必须向后可读，
+    新增字段一律可选，旧工程打开不得报错
+  - ⚠️ 你正在改 Note / musical_time 的时间语义，Agent-A 的 S1 sequencer
+    也依赖同一套 tick 表示。改时间模型前先在 docs/COORDINATION.md 登记，
+    避免两边同时改导致语义分裂
+  - 只新增文件为主，暂不改 models/project.dart（S0 已加扩展字段位），
+    需要集成时先登记
+  - 四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【验收】导入多轨 MIDI 正确生成多轨道多 Pattern；导出 MIDI 能被通用音序器
+正确读取；外部键盘弹奏可录入卷帘；量化与摇摆生效。
+
+完成后更新 docs/stages/s6-report.md 与 PLAN §6 进度表。
+```
+
+---
+
+### 📋 Agent-F — S8 音频编辑 + S9 收尾
+
+```
+你是 Agent-F，负责「卓声」DAW 项目的 S8（音频编辑）与 S9（收尾）。
+
+工作目录：F:\exeliang\zenith_audio
+必读：
+  1. docs/PLAN_DAW_PARITY.md — §0.2 约束、§3 的 S8 与 S9 全节
+  2. lib/models/audio_clip.dart（现有 AudioClip / Selection 模型）
+  3. lib/widgets/editor/audio_clip_editor.dart、effect_dialog.dart
+
+【依赖】S8 依赖 Agent-D 的 S3（混音器）与 Agent-E 的 S6（编曲结构）。
+  但**拉伸 / 切片算法是独立的纯函数**（Float32 数组进、Float32 数组出），
+  可以脱离引擎先实现并配单元测试。建议先做这部分。
+  波形编辑器 UI 需等 S3/S6 稳定。
+
+【任务 S8】按 PLAN §3 S8，算法在 Rust 中实现：
+  - 非破坏性编辑：片段引用源文件 + 偏移 + 增益包络 + 淡入淡出，不改源
+  - 实时时间拉伸 / 变调：WSOLA 或相位声码器，独立于宿主速度
+  - 交叉淡化：任意两片段重叠处自动/手动淡化曲线
+  - 音频切片：瞬态检测 → 切片 → 映射到卷帘音符
+  - 音频量化：瞬态对齐网格
+  - 波形编辑器（P2）：破坏性编辑，独立窗口
+  - 【注意】Web 端拉伸属于重型渲染，受 S1.5 降级策略管辖（L1 降级时不可用）
+
+【任务 S9 — 收尾】
+  - A/B 对比：两份工程状态快速切换
+  - 性能：128 轨 + 多效果压力测试，目标实时率 < 50%
+  - 文档：用户手册、快捷键表、架构文档、Rust 核心开发指南
+  - 迁移工具：旧 .zap / .zaproj 一键迁移向导
+  - 移除旧依赖：确认无引用后彻底下线 media_kit
+  - 构建固化：确认 hook/build.dart 在六平台 CI 上稳定产出原生库
+    （CI 各 job 需补 rustup target add 步骤）
+
+【硬性约束】
+  - 不引入第三方 DAW 品牌名（含用户手册等文档）
+  - 不破坏现有工程格式
+  - 改 lib.rs / Cargo.toml / ffi/ 前先在 docs/COORDINATION.md 登记
+  - 四项全绿：cargo clippy --all-targets -- -D warnings、cargo test、
+    flutter analyze（0 error）、flutter test
+
+【验收】拉伸 ±50% 无明显金属音；切片后可直接用卷帘重排节奏；
+六平台 CI 全部产出原生库。
+
+完成后交付 docs/stages/s8-report.md 与 s9-report.md，并更新 PLAN §6 进度表。
+```
+
+---
+
+### 7.1 启动顺序建议（重要）
+
+**不要一次放 6 个会话。** 建议：
+
+| 批次 | 启动 | 理由 |
+|---|---|---|
+| **第 1 批** | **Agent-A（先只做 S1.0 前置项）** | 前置项 A/B 是所有人的地基；B 的适配层让后续换引擎可回滚。**做完先汇报，不要直接冲 S1.1** |
+| **第 2 批** | Agent-E（S6）+ Agent-C（S2 纯逻辑部分） | 二者都主要新增自有目录，与 S1 冲突面小；可与第 1 批并行 |
+| **第 3 批** | Agent-A（S1.1 主体）、Agent-B（S1.5 不依赖驱动的部分） | S1.0 通过后放行 |
+| **第 4 批** | Agent-C（S5）、Agent-D（S3/S7） | 需 S1 的图结构稳定；S5 还需先扩 ABI |
+| **第 5 批** | Agent-F（S8/S9） | 需 S3 与 S6 稳定 |
+
+**每个会话开工前必须先确认上游依赖已落地**，提示词里已写明各自的前置检查项。
+
+### 7.2 当前阻断项（开工前必须解决）
+
+1. 🔴 `Cargo.toml` 的 `panic = "abort"` 与 `lib.rs` 的 `catch_unwind` 承诺矛盾
+   —— **Agent-A 的第一个任务**
+2. 🔴 `AudioEngine` 接口零实现者、34 个调用点仍绑在 `AudioService`
+   —— **Agent-A 的第二个任务（前置项 B）**
+3. 🟡 S5 开工前需先扩 ABI（参数描述符查询）—— **Agent-C 的第一个任务**
+4. 🟡 `docs/ABI.md` 顶部"截至 v1.0 仓库内 native/ 不存在"的说明已过时
+   —— 应随 S1 一并更新

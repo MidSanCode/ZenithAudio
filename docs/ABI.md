@@ -4,12 +4,24 @@
 > **地位**：本文件是 Dart 侧与 Rust 核心（`native/zenith_core/`）之间**唯一的跨语言契约**。
 > 属于 `docs/PLAN_DAW_PARITY.md` §4.2 第 1、2 条所称的「接口契约」，
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
-> **文档版本**：v1.0（对应 S0 契约冻结）
+> **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 起补充 S0 实际落地状态
 >
-> **当前实现状态（重要）**：截至 v1.0，仓库内 **`native/`、`hook/`、`lib/engine/` 均不存在**，
-> 尚无任何 Rust 代码或 C ABI 导出符号。本文件描述的是 **S0 必须落地、S1 起必须遵守的目标契约**。
-> 凡标注 **[S0 落地]** 的条目是 S0 完成的定义（DoD）；
-> 标注 **[S1+]** 的条目是后续阶段必须遵守的契约约束。
+> **当前实现状态（S0 已完成，2026-09-30 更新）**：
+> `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
+> `lib/plugins/` **均已存在**并进入版本控制。S0 已导出并验证的符号为：
+> `zenith_version()` / `zenith_version_match(u32)` / `zenith_version_string()`，
+> 共 3 个，`ABI_VERSION = 0x000100`（0.1.0）。
+> 端到端已验证：`flutter build windows --debug` 会链接 Rust 静态库并把
+> `zenith_core.dll` 落在 exe 同级目录。
+>
+> 因此：本文件中标注 **[S0 落地]** 的条目**大部分仍是目标契约而非已实现事实**
+> ——S0 只交付了版本握手这一最小链路。DSP 图、sequencer、mixer、effects
+> 的 ABI 均待 S1–S5 逐步落地，落地时必须同步更新本文件。
+>
+> ⚠️ 已知不一致（S1 必须修复）：`Cargo.toml` 的 `[profile.release]` 当前写着
+> `panic = "abort"`，与本文原则 **P4**（panic 不得跨 FFI 边界，须 `catch_unwind`
+> 包裹）**直接矛盾**——`abort` 下 `catch_unwind` 永远无法捕获。见
+> `docs/PLAN_DAW_PARITY.md` §3 S1.0 前置项 A。
 >
 > ⚠️ 本文件描述的是**我们自己**的 ABI。禁止在本仓库引入任何第三方 DAW 品牌名（§0.2）。
 
