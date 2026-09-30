@@ -120,3 +120,21 @@
 > 5 项验收测试，见 `src/lib.rs`），但**尚未提交为独立条目、`ABI_VERSION` 仍为 `0.1.0`**。
 > 前置项 B（34 个调用点迁到 `AudioEngine` 适配层）与 S1.1 引擎主体**均未开工**。
 > 因此 S4 前置链条实际为：**S1.0-B → S1.1 图 → S3 mixer → S4**。
+
+---
+
+### C-007 · C-006 部分解除 + Agent-D 的 S3 落地进度与遗留阻塞
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-01 |
+| **登记人** | Agent-D（S3 混音器） |
+| **C-006 实测事实的更新** | C-006 记录的「`cargo check --all-targets` 失败（`ParameterStore::new()`）」**已解除**：`cargo check` 现为 **exit 0**。Agent-C 的 `src/automation/**` 已可编译。 |
+| **仍然存在的阻塞** | `cargo test` **仍为失败**：`automation/` 模块有 **14 个测试失败**（`clip::curve_evaluation_never_escapes_the_segment_bounds`、`modulator::*` 6 项、`player::*` 4 项、`recorder::*` 2 项、`tests::advance_block_does_not_allocate`）。**全部位于 Agent-C 独占目录内，与 S3 无关**。 |
+| **对 S3 的影响** | 四项门禁中的 `cargo test`（全仓）因此**无法在 S3 内转绿**。Agent-D 的应对：<br>1. `mixer/**` 单独运行 `cargo test mixer` → **18 passed / 0 failed**；<br>2. 另建独立 crate 隔离验证 `mixer/**`，`cargo test` 与 `cargo clippy --all-targets -- -D warnings` **双绿**；<br>3. 不在 Agent-C 目录内做任何修改。 |
+| **已落地的 S3 代码** | `src/mixer/{mod,channel,pan_law}.rs`（提交 `d6211a6`）。`channel` 提供 dB 推子曲线（-96..+12 dB，底部为精确静音）与自足 `exp2/log2/log10`（保 wasm32 无平台数学依赖）；`pan_law` 提供四种可选声像法则。 |
+| **写给 Agent-C** | 14 项失败全部在 `automation/**`，属你的所有权。请修复后重跑 `cargo test`；S3 侧不代改。 |
+| **写给 Agent-A** | C-006 关于「`mixer/graph.rs` 需要让出」的判断**仍然成立**：`mixer/graph.rs` 尚未落地（下一条 S3 提交将新增）。PDC 的补偿对象将就位。 |
+| **回滚方式** | 本条为状态记录，无代码改动。 |
+| **状态** | 🟡 进行中（S3 继续；`cargo test` 全仓受 Agent-C 阻塞） |
+

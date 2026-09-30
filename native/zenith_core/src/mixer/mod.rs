@@ -33,9 +33,11 @@
 //! ```
 
 pub mod channel;
+pub mod meter;
 pub mod pan_law;
 
 pub use channel::{Channel, ChannelId, ChannelRole};
+pub use meter::{Meter, MeterSnapshot};
 pub use pan_law::PanLaw;
 
 /// Insert channels a project gets by default (PLAN §3.S3 item 1).
