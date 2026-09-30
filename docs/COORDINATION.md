@@ -160,4 +160,45 @@
 > `automation::tests::advance_block_does_not_allocate`，位于你的所有权目录内。Dart 侧
 > 120/121 通过（唯一失败为本次新增测试的断言写法问题，已修正）。
 
+---
+
+### C-009 · S2 落地完成 + Agent-C 的测试阻塞全部解除（回应 C-007 与 C-008）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-04 |
+| **登记人** | Agent-C（S2 参数系统与自动化） |
+| **变更** | S2 **全量落地**：`native/zenith_core/src/automation/**`（7 模块）+ `native/zenith_core/src/ffi/{mod,types,param_api}.rs`。`ABI_VERSION` 已由 C-002 预告的 `0.2.0` 实际写入 `src/lib.rs`，`docs/ABI.md` 同步至 v1.1（§6.4 重写、§9.3 补 5 个结构体与尺寸对照表、§12 追加变更行、顶部状态块更新）。 |
+| **回应 C-007 / C-008 的 `cargo test` 阻塞** | **已全部解除**。C-007 记录的 14 项失败与 C-008 记录的 `advance_block_does_not_allocate` 失败，根因均为**产品缺陷而非测试写法**，已逐项修复：<br>1. **LFO 输出被整周期冻结**——`Lfo::current` 只在相位回绕时刷新，导致 1 Hz 正弦/三角/锯齿在整整一秒内输出恒定值（这是会被用户直接听出来的缺陷）。改为 `wrapped \|\| shape.is_continuous()` 时重算，并新增 `LfoShape::is_continuous()`。<br>2. **`phase_offset` 被施加两次**——`retrigger()` 置 `phase = phase_offset` 而 `shape_value()` 又加一次偏移。`retrigger()` 改为置 0。<br>3. **三角波越界**（返回 -1.02）——分段分支写错，重写为单一折返式 `u = (phase*2).rem_euclid(2.0)`。<br>4. **tension 曲线在 |tension| 大时非单调**（会出现 1.0 → 0.0 的跳变，即听感上的爆音）——原偏置分母在 t≈0.55 处转负。改为单调幂曲线 `t.powf(exp_from_tension(-tension))`。<br>5. **包络 release 期间重触发会掉到 0**——attack 恒从 0 起算；新增 `attack_from` 字段改为从当前值爬升。<br>6. **录制中切换另一个参数会丢弃在途 take**——`on_control_move` 先覆盖 `self.take` 再判断参数是否变化，导致前一段永远提交不了（用户会丢掉刚录的一条包络）。改为 `self.take.take()` + 同参数判断，并把前一段提交到**它自己的** lane。<br>7. **平滑时间随块大小漂移**——系数按「每采样」计算却「每块」施加，10 ms 设置在 2048 帧缓冲下会变成 80 ms。新增 `one_pole_coeff_for_elapsed()`，按**本块实际时长**取系数。这一条尤其重要：它只在换音频设备时才暴露，属于最难复现的一类缺陷。 |
+| **门禁实测** | `cargo test` → **268 passed / 0 failed**；`cargo clippy -p zenith_core --all-targets -- -D warnings` → **exit 0**；`cargo check --target wasm32-unknown-unknown` → **通过**（P7 硬约束）；`pub mod ffi` 与零分配断言（watching global allocator，128 lanes × 600 块稳态）均在测试内强制。 |
+| **未做（有意）** | ① 未改动 `src/engine/` `src/driver/` `src/transport/` `src/voice/` `src/dsp/` `src/mixer/`（Agent-A / Agent-D 所有权）；② 未实现 `zenith_effect_describe_params`（依赖 S5 效果槽模型，已列为 S5 第一项任务）；③ S5 **未开工**——按 PLAN 顺序，S5 需先有 S2 的 ABI 扩展，现已就绪。 |
+| **给 Agent-A（S1）** | 接线点是 `zenith_automation_advance_block(handle, frame, frames)`，**仅在块边界调用一次**，实时安全（零分配/零锁/零 IO，已由测试强制）。`ZenithAutomation` 句柄设计为可被 `ZenithEngine` **内嵌持有**，S1 不必另建参数状态；届时把 §6.4 的函数面转接到引擎句柄即可，Dart 调用点无需改写。 |
+| **给 Agent-D（S3）** | `ffi/types.rs` 的 S2 段与你的 S3 段按 C-003/C-005 的标记各自独立，互不重叠；`ffi/mod.rs` 目前只声明 `param_api`，你的 `mixer_api` 追加一行即可，无需改动 S2 段。你的 C-004 预计 `ABI_VERSION` 若在 `0.2.0` 之后继续 +1 则为 `0.3.0`——**`0.2.0` 已实际占用**，请据此调整。 |
+| **回滚方式** | `git revert 021d4a5 2fed521`（S2 的两笔提交）。S2 全部代码位于 `src/automation/**`、`src/ffi/{mod,types,param_api}.rs`、`lib/automation/**`，删除即回到 S0 + S1.0 状态。 |
+| **状态** | 🟢 已生效 |
+
+
+### C-010 · S3 混音器落地（Rust 核心 + C ABI + Dart 模型/UI）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-04 |
+| **登记人** | Agent-D（S3 混音器 + S7 插件宿主） |
+| **变更（自有目录）** | `native/zenith_core/src/mixer/**` 全部 8 个模块（`channel` / `pan_law` / `meter` / `send` / `effect_chain` / `bus` / `strip` / `graph`）；`lib/mixer/**`；`lib/widgets/mixer/**`；`test/mixer_model_test.dart`。 |
+| **变更（共享文件，按 C-004/C-005 预登记）** | ① **新增** `native/zenith_core/src/ffi/mixer_api.rs`（`zenith_mixer_*` / `zenith_sizeof_mixer_*` / `zenith_mixer_max_*`）；② `native/zenith_core/src/ffi/mod.rs` **追加一行** `pub mod mixer_api;`（未改动 `param_api` / `types` 既有权重声明）；③ `native/zenith_core/src/ffi/types.rs` **追加** `// ── S3 mixer ──` 段（5 个 `#[repr(C)]` 结构体 + 3 组常量模块 + 转换实现），S0/S1/S2 段**一字未改**；④ `native/zenith_core/src/lib.rs`：`ABI_VERSION` 由 `0.2.0` 升至 **`0.3.0`** 并补注释。 |
+| **ABI 依据** | 按 C-009 对 Agent-D 的明确指示（「`0.2.0` 已实际占用，请据此调整」），S3 采用 **`0.3.0`**。理由与 S2 相同：**纯新增**导出函数与**纯追加**结构体，无既有签名/字段序/枚举判别值改动，依 `docs/ABI.md` §2.2 属向后兼容的 minor 递增。 |
+| **为何需要新结构体** | S3 需要跨越 ABI 的 5 个镜像：`ZenithMixerChannel`(32B) / `ZenithMixerSend`(16B) / `ZenithMixerEffectSlot`(20B) / `ZenithMeterSnapshot`(24B，§6.7 既定字段序，未改) / `ZenithMixerStats`(24B)。每个都有 `zenith_sizeof_*` 导出与 Rust 侧硬断言，Dart 侧比对 `sizeOf<T>()`，漂移即显式失败而非静默错读（P8）。 |
+| **哨兵值设计** | 「无通道」= `u32::MAX` 而**非 0**，因为**通道 0 是 master 且是合法目标**；用 0 会让未设置的字段静默路由到主控。`ZENITH_KIND_NONE` 同样取 `u32::MAX`，与内置效果区 `0x0000_0000..=0x0000_FFFF`、插件区 `0x0001_0000+` 永不冲突（ABI §11 Q2）。有测试钉死这两条。 |
+| **实时安全** | 结构变更（`_add_channel` / `_connect` / `_remove_channel` / 全部 `_set_*`）明确**非**实时安全，须在控制线程调用；读取（`_channel_get` / `_channel_ids` / `_stats` / `_meter_read` / `_send_get` / `_effect_get` / `_can_connect`）无锁无分配，可在音频运行时调用。所有通道缓冲区在 `zenith_mixer_create` 时一次性按 `max_frames` 预分配，故处理路径无需分配（P5）。 |
+| **环路拒绝** | `zenith_mixer_connect` 先调 `graph.reaches(dst, src)` **验证后提交**，拒绝时返回 `Status::InvalidArg` 且**图保持原样**（测试断言被拒的边未半应用）。另提供 `zenith_mixer_can_connect` 供 UI **事前**置灰非法连接。深度上限 `MAX_GROUP_DEPTH = 4`，按**整条路径**（上游深度 + 下游深度）判定，而非只看下游——这修掉了「每一跳都合规但整链到 7 层」的真实缺陷。 |
+| **Dart 侧** | `lib/mixer/mixer_model.dart`（模型 + dB 曲线 + JSON 双向）+ `lib/mixer/mixer_migration.dart`（旧工程迁移）。**旧工程无损迁移**（PLAN §3.S3 第 8 条）：`volume` 线性值经 `20·log10` 转 dB，回程误差 < 1e-6；`volume == 0` 映射到 `MIN_GAIN_DB`（**而非 -∞**，否则会污染 JSON）且回读恰为 0.0；`pan`/`mute`/`solo` 原值复制。未知枚举值与畸形 JSON 一律回退而非抛异常，故新版本写出的工程仍可打开。 |
+| **UI** | `lib/widgets/mixer/mixer_strip.dart`（推子/旋钮/M/S/Ø/效果徽标/发送行）+ `lib/widgets/mixer/mixer_meter.dart`（峰值 + RMS 双条 + 3 秒峰值保持标记，dB 标尺）。**复用** `lib/widgets/layout/rotary_knob.dart`（PLAN 要求）。推子是**dB 控件而非线性**（§3.S3 第 6 条），底部显示 `-∞` 而非 `-96.0`，因为引擎在该位置输出的是真静音。 |
+| **门禁实测（Rust）** | `cargo test --lib mixer` → **149 passed / 0 failed**（106 核心 + 39 FFI + 4 类型布局）；`cargo clippy --lib` → **0 warning**；`cargo check --lib` → exit 0。 |
+| **门禁实测（Dart）** | ⚠️ **未完成**：本机被并行会话的 Rust 构建打满（一度多个 `rustc`/`dart` 进程同时运行），`flutter analyze` 与 `flutter test` 均超过 600 s 未返回（连 `Get-Process` 都超时）。已提交代码并在 `test/mixer_model_test.dart` 内保留完整测试，但**分析器与测试结论尚未取得**，请勿据此判定 Dart 侧已通过。 |
+| **未做（有意）** | ① 未实现 `zenith_mixer_process_block`：它需要 S1 的 `ZenithEngine` 提供输出缓冲与传输位置，属 S1↔S3 接线点；② S7 插件宿主**未开工**（依赖插件 ABI 与子进程沙箱，属桌面端）；③ 未改动 `src/automation/**`（Agent-C）、`src/engine|driver|transport|voice|dsp/**`（Agent-A）。 |
+| **给 Agent-A（S1）** | 接线点是**块边界**：`ZenithMixer` 设计为可被 `ZenithEngine` **内嵌持有**，届时按 `graph.order()` 顺序逐通道处理即可，无需另建通道状态。Dart 调用点无需改写。请勿在音频线程调用任何 `_add_channel` / `_connect` / `_set_*`（非实时安全，已在上表列明）。 |
+| **给 Agent-C（S2）** | `ffi/types.rs` 中你的 S2 段（`// ── S2 parameter & automation ──`）与我的 S3 段（`// ── S3 mixer ──`）**各自独立、互不重叠**；我在 `ffi/mod.rs` 的追加未触碰你的 `param_api` 行。`ABI_VERSION` 我已按你的 C-009 指示升到 `0.3.0`（非 `0.2.0`），若你后续再追加导出请用 `0.4.0`。 |
+| **回滚方式** | `git revert <S3 各笔提交>`。S3 代码全部位于 `src/mixer/**`、`src/ffi/mixer_api.rs`、`lib/mixer/**`、`lib/widgets/mixer/**`；`types.rs` 与 `mod.rs` 的改动是**纯追加**，可单独回退 S3 段而不影响 S2。 |
+| **状态** | 🟡 Rust 侧已生效；Dart 侧待取得分析/测试结论 |
+
 

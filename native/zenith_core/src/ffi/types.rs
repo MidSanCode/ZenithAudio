@@ -303,6 +303,163 @@ pub struct ZenithRecorderState {
     pub _reserved_1: u32,
 }
 
+// ── S3 mixer ──
+//
+// Owned by Agent-D. Per `docs/COORDINATION.md` C-005, this section is additive:
+// it does not modify a single existing line of the S0/S1/S2 sections above.
+//
+// The layouts mirror `lib/mixer/ffi/mixer_types.dart` field-for-field. Every
+// struct is `#[repr(C)]` with explicit padding where needed, because the ABI is
+// the only contract between the two languages (P8).
+
+/// A mixer channel's parameters, mirrored across the ABI (S3).
+///
+/// Field order and widths are frozen: the size is asserted in the tests below
+/// and in `lib/mixer/ffi/mixer_types.dart`. `role` and `flags` are `u32`
+/// rather than Rust enums so an unknown discriminant from a newer core cannot
+/// make the struct unrepresentable in Dart (ABI §2.2).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZenithMixerChannel {
+    /// Channel index. Never reused after removal (ABI §11 Q3).
+    pub id: u32,
+    /// [`zenith_channel_role`] discriminant.
+    pub role: u32,
+    /// Fader position in decibels, clamped to `MIN_GAIN_DB..=MAX_GAIN_DB`.
+    pub gain_db: f32,
+    /// Pan position, `-1.0` hard left to `1.0` hard right.
+    pub pan: f32,
+    /// Index of the channel this one feeds, or `u32::MAX` for master.
+    pub output: u32,
+    /// [`zenith_channel_flags`] bitset.
+    pub flags: u32,
+    /// Number of occupied effect slots, for the UI badge.
+    pub effect_count: u32,
+    /// Number of active sends.
+    pub active_sends: u32,
+}
+
+/// One send slot, mirrored across the ABI (S3).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZenithMixerSend {
+    /// Whether this send contributes.
+    pub enabled: u32,
+    /// [`zenith_send_tap`] discriminant.
+    pub tap: u32,
+    /// Send level in decibels.
+    pub level_db: f32,
+    /// Destination channel index, or `u32::MAX` when unrouted.
+    pub destination: u32,
+}
+
+/// One effect slot, mirrored across the ABI (S3).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZenithMixerEffectSlot {
+    /// Slot position, `0..10`. This is the processing order, not the kind.
+    pub index: u32,
+    /// Effect kind id, or `u32::MAX` when the slot is empty.
+    ///
+    /// Built-ins occupy `0x0000_0000..=0x0000_FFFF` and plugins `0x0001_0000+`
+    /// (ABI §11 Q2), so the sentinel can never collide with a real kind.
+    pub kind: u32,
+    /// Whether the slot is bypassed.
+    pub bypassed: u32,
+    /// Wet/dry balance, `0.0` fully dry to `1.0` fully wet.
+    pub wet: f32,
+    /// Sidechain source channel, or `u32::MAX` when none.
+    pub sidechain: u32,
+}
+
+/// Sentinel meaning "no channel" in a `u32` channel field.
+///
+/// `u32::MAX` rather than `0`, because channel `0` is master and a legitimate
+/// destination: using `0` as "none" would silently route unset fields to the
+/// master bus.
+pub const ZENITH_CHANNEL_NONE: u32 = u32::MAX;
+
+/// Sentinel meaning "no effect kind" in [`ZenithMixerEffectSlot::kind`].
+pub const ZENITH_KIND_NONE: u32 = u32::MAX;
+
+/// [`ZenithMixerChannel::role`] discriminants.
+///
+/// These values are part of the ABI and must never be renumbered.
+pub mod zenith_channel_role {
+    /// A normal insert channel fed by a track.
+    pub const INSERT: u32 = 0;
+    /// A return channel fed by sends.
+    pub const RETURN: u32 = 1;
+    /// A group channel that sums other channels.
+    pub const GROUP: u32 = 2;
+    /// The single master channel.
+    pub const MASTER: u32 = 3;
+}
+
+/// [`ZenithMixerChannel::flags`] bits.
+///
+/// A bitset rather than four separate `u8` fields: the ABI passes booleans as
+/// `u8` (ABI §3.1), and four of them would cost four bytes of padding anyway.
+pub mod zenith_channel_flags {
+    /// The channel is muted.
+    pub const MUTED: u32 = 1 << 0;
+    /// The channel is soloed.
+    pub const SOLO: u32 = 1 << 1;
+    /// The channel's polarity is inverted.
+    pub const PHASE_INVERT: u32 = 1 << 2;
+    /// The channel currently contributes to the mix, after mute/solo.
+    pub const AUDIBLE: u32 = 1 << 3;
+    /// The channel is still alive (not removed).
+    pub const ALIVE: u32 = 1 << 4;
+}
+
+/// [`ZenithMixerSend::tap`] discriminants.
+pub mod zenith_send_tap {
+    /// Post-fader: the send follows the channel fader.
+    pub const POST_FADER: u32 = 0;
+    /// Pre-fader: the send ignores the channel fader.
+    pub const PRE_FADER: u32 = 1;
+}
+
+/// A channel's level reading, mirrored across the ABI (S3).
+///
+/// The field order matches `docs/ABI.md` §6.7, which froze it before S3 landed.
+/// All values are linear amplitudes where `1.0` is full scale.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ZenithMeterSnapshot {
+    /// Peak magnitude, left.
+    pub peak_l: f32,
+    /// Peak magnitude, right.
+    pub peak_r: f32,
+    /// RMS magnitude, left.
+    pub rms_l: f32,
+    /// RMS magnitude, right.
+    pub rms_r: f32,
+    /// Held peak, left.
+    pub peak_hold_l: f32,
+    /// Held peak, right.
+    pub peak_hold_r: f32,
+}
+
+/// Aggregate counts describing a mixer, mirrored across the ABI (S3).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ZenithMixerStats {
+    /// Live channels, master included.
+    pub channels: u32,
+    /// Total sends currently active across every channel.
+    pub active_sends: u32,
+    /// Total occupied effect slots across every channel.
+    pub effects: u32,
+    /// Whether any channel is soloed.
+    pub has_solo: u32,
+    /// Deepest group nesting currently in the graph.
+    pub max_depth: u32,
+    /// Explicit padding, held at zero.
+    pub _reserved_0: u32,
+}
+
 // ── Mirror conversion helpers ──
 
 impl From<ParameterAddress> for ZenithParamId {
@@ -456,6 +613,71 @@ impl From<EnvelopeStage> for u32 {
     }
 }
 
+// ── S3 mixer mirror conversions ──
+
+impl From<crate::mixer::ChannelRole> for u32 {
+    fn from(role: crate::mixer::ChannelRole) -> Self {
+        use crate::mixer::ChannelRole;
+        match role {
+            ChannelRole::Insert => zenith_channel_role::INSERT,
+            ChannelRole::Return => zenith_channel_role::RETURN,
+            ChannelRole::Group => zenith_channel_role::GROUP,
+            ChannelRole::Master => zenith_channel_role::MASTER,
+        }
+    }
+}
+
+impl TryFrom<u32> for crate::mixer::ChannelRole {
+    /// The unrecognized discriminant.
+    type Error = ChannelRoleMismatch;
+
+    /// Rejects an unknown role rather than coercing it.
+    ///
+    /// Coercing would address a *different kind of channel* than the caller
+    /// asked for, which is exactly the silent misroute ABI §2.2 warns about.
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        use crate::mixer::ChannelRole;
+        match value {
+            zenith_channel_role::INSERT => Ok(ChannelRole::Insert),
+            zenith_channel_role::RETURN => Ok(ChannelRole::Return),
+            zenith_channel_role::GROUP => Ok(ChannelRole::Group),
+            zenith_channel_role::MASTER => Ok(ChannelRole::Master),
+            other => Err(ChannelRoleMismatch(other)),
+        }
+    }
+}
+
+/// Returned when a channel role discriminant is not known to this build.
+///
+/// An unknown role must surface as an error rather than being coerced, because
+/// coercing would address a different kind of channel than the caller asked for
+/// (ABI §2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelRoleMismatch(pub u32);
+
+impl From<crate::mixer::SendTap> for u32 {
+    fn from(tap: crate::mixer::SendTap) -> Self {
+        use crate::mixer::SendTap;
+        match tap {
+            SendTap::PostFader => zenith_send_tap::POST_FADER,
+            SendTap::PreFader => zenith_send_tap::PRE_FADER,
+        }
+    }
+}
+
+impl From<crate::mixer::MeterSnapshot> for ZenithMeterSnapshot {
+    fn from(snapshot: crate::mixer::MeterSnapshot) -> Self {
+        Self {
+            peak_l: snapshot.peak_l,
+            peak_r: snapshot.peak_r,
+            rms_l: snapshot.rms_l,
+            rms_r: snapshot.rms_r,
+            peak_hold_l: snapshot.peak_hold_l,
+            peak_hold_r: snapshot.peak_hold_r,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +795,112 @@ mod tests {
             unsafe { core::ffi::CStr::from_ptr(other) }.to_str().unwrap(),
             "pan"
         );
+    }
+
+    // ── S3 mixer layout assertions ──
+    //
+    // These mirror `lib/mixer/ffi/mixer_types.dart`; a failure here means both
+    // sides must change in the same commit (ABI §9.2).
+
+    #[test]
+    fn mixer_channel_layout_is_pinned() {
+        // 4 (id) + 4 (role) + 4 (gain) + 4 (pan) + 4 (output) + 4 (flags)
+        // + 4 (effect_count) + 4 (active_sends) = 32
+        assert_eq!(size_of::<ZenithMixerChannel>(), 32);
+    }
+
+    #[test]
+    fn mixer_send_layout_is_pinned() {
+        // 4 (enabled) + 4 (tap) + 4 (level) + 4 (destination) = 16
+        assert_eq!(size_of::<ZenithMixerSend>(), 16);
+    }
+
+    #[test]
+    fn mixer_effect_slot_layout_is_pinned() {
+        // 4 (index) + 4 (kind) + 4 (bypassed) + 4 (wet) + 4 (sidechain) = 20
+        assert_eq!(size_of::<ZenithMixerEffectSlot>(), 20);
+    }
+
+    #[test]
+    fn meter_snapshot_layout_is_pinned() {
+        // Six f32s, and the ABI §6.7 field order is frozen.
+        assert_eq!(size_of::<ZenithMeterSnapshot>(), 24);
+    }
+
+    #[test]
+    fn mixer_stats_layout_is_pinned() {
+        // 6 × u32 = 24
+        assert_eq!(size_of::<ZenithMixerStats>(), 24);
+    }
+
+    #[test]
+    fn the_none_sentinels_cannot_collide_with_real_values() {
+        // Master is channel 0, so "none" must not be 0 or it would silently
+        // route unset fields to the master bus.
+        assert_ne!(ZENITH_CHANNEL_NONE, 0);
+        assert_ne!(ZENITH_CHANNEL_NONE, crate::mixer::ChannelId::MASTER.get());
+
+        // The kind sentinel must sit above the plugin id range. Read through
+        // `black_box` so this stays a runtime check: the constants are known at
+        // compile time, and a folded assertion would be flagged as vacuous
+        // while providing no protection against a future renumbering.
+        let none = core::hint::black_box(ZENITH_KIND_NONE);
+        let top_builtin = core::hint::black_box(0x0001_FFFFu32);
+        assert!(none > top_builtin);
+    }
+
+    #[test]
+    fn channel_role_round_trips_and_rejects_unknown() {
+        use crate::mixer::ChannelRole;
+        for role in [
+            ChannelRole::Insert,
+            ChannelRole::Return,
+            ChannelRole::Group,
+            ChannelRole::Master,
+        ] {
+            let wire: u32 = role.into();
+            assert_eq!(ChannelRole::try_from(wire), Ok(role));
+        }
+        assert_eq!(
+            ChannelRole::try_from(999),
+            Err(ChannelRoleMismatch(999)),
+            "an unknown role must be rejected, not coerced"
+        );
+    }
+
+    #[test]
+    fn channel_flag_bits_are_distinct() {
+        let bits = [
+            zenith_channel_flags::MUTED,
+            zenith_channel_flags::SOLO,
+            zenith_channel_flags::PHASE_INVERT,
+            zenith_channel_flags::AUDIBLE,
+            zenith_channel_flags::ALIVE,
+        ];
+        for (i, a) in bits.iter().enumerate() {
+            assert_eq!(a.count_ones(), 1, "bit {i} is not a single bit");
+            for b in bits.iter().skip(i + 1) {
+                assert_eq!(a & b, 0, "flag bits overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn meter_snapshot_conversion_preserves_every_field() {
+        let internal = crate::mixer::MeterSnapshot {
+            peak_l: 1.0,
+            peak_r: 2.0,
+            rms_l: 3.0,
+            rms_r: 4.0,
+            peak_hold_l: 5.0,
+            peak_hold_r: 6.0,
+        };
+        let mirrored: ZenithMeterSnapshot = internal.into();
+        assert_eq!(mirrored.peak_l, 1.0);
+        assert_eq!(mirrored.peak_r, 2.0);
+        assert_eq!(mirrored.rms_l, 3.0);
+        assert_eq!(mirrored.rms_r, 4.0);
+        assert_eq!(mirrored.peak_hold_l, 5.0);
+        assert_eq!(mirrored.peak_hold_r, 6.0);
     }
 }

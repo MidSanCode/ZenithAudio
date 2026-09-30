@@ -17,5 +17,6 @@
 //! Adding a file here requires a coordination entry, because `lib.rs` must
 //! declare it.
 
+pub mod mixer_api;
 pub mod param_api;
 pub mod types;
