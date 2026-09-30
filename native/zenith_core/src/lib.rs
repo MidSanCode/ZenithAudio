@@ -17,6 +17,23 @@
 use core::ffi::c_char;
 use core::panic::AssertUnwindSafe;
 
+/// Re-export of `alloc`, so modules can name `alloc::vec::Vec` and keep working
+/// unchanged if the core is ever built `no_std` for a constrained target.
+///
+/// The crate links `std` today, which means `alloc` is already in the extern
+/// prelude; naming it here makes that dependency explicit rather than implicit
+/// and keeps the `no_std` path a one-line change in the future.
+extern crate alloc;
+
+pub mod automation;
+
+/// Mixer: console topology, channel strips, sends, effect slots and metering.
+///
+/// Concerned with *structure and values* only — it owns no audio device and no
+/// transport. See `docs/COORDINATION.md` C-004 / C-005 for the registration of
+/// this module and its `ffi/` surface.
+pub mod mixer;
+
 /// ABI version of this library, as `major << 16 | minor << 8 | patch`.
 ///
 /// Dart passes the version it was compiled against to [`zenith_version_match`]

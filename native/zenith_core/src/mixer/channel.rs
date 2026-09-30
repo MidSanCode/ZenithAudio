@@ -113,10 +113,18 @@ fn exp2(x: f32) -> f32 {
     }
     let xi = floor_f(x);
     let frac = x - xi;
-    // 2^frac for frac in [0,1), degree-6 minimax-ish polynomial.
+    // `2^frac` for `frac in [0,1)`.
+    //
+    // These are minimax coefficients, not the truncated Taylor series: Taylor
+    // converges too slowly over a full unit interval, and truncating it at
+    // degree 5 leaves ~1.7e-4 of relative error — enough to miss the 6 dB
+    // anchor that every fader is calibrated against. The leading coefficient is
+    // `ln 2` exactly, so it is written as the named constant; clippy rejects an
+    // approximation of a constant that exists in `core::f32::consts`.
+    let c1 = core::f32::consts::LN_2;
     let p = 1.0
         + frac
-            * (0.693_147_2
+            * (c1
                 + frac
                     * (0.240_226_5
                         + frac
