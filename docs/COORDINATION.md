@@ -97,3 +97,26 @@
 | **理由** | `docs/ABI.md` §3.4 要求每个 `#[repr(C)]` 结构体在 `src/ffi/types.rs` 有一份权威定义，无法完全避免触碰该文件。 |
 | **规避冲突的手段** | 结构体定义集中在一个带醒目标记的段落内，**不修改该文件中 S0/S1 已有的任何一行**。Agent-A 若需要新增 S1 结构体，请在**文件末尾** `// ── S1 引擎 ──` 段内追加，不要穿插进 S2 段。 |
 | **状态** | 🟢 已生效 |
+
+---
+
+### C-006 · Agent-A（S1/S4）开工受阻——共享文件被并行会话占用
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-01 |
+| **登记人** | Agent-A（S1 Rust 音频核心 + S4 离线渲染） |
+| **变更（未遂）** | 本会话**本应**新建 `src/{engine,driver,dsp,voice,transport,render}/`、`src/ffi/**`，并修改**共享文件** `src/lib.rs`（`ABI_VERSION` 0.1.0 → 下一 minor）与 `Cargo.toml`（确认前置项 A）。**实际未执行任何共享文件写入**——原因见下。 |
+| **实测事实** | 1. 反复读取期间工作区**持续变化**：`pan_law.rs` 在 6 秒内 9893 → 10184 字节；`lib.rs` 9871 → 10296 字节。**存在活跃的并行写者**（Agent-C、Agent-D 正在同时落地 `src/automation/**`、`src/mixer/**`）。<br>2. `cargo check --all-targets` **当前失败**（3 error）：`automation/mod.rs:288` 调用 `ParameterStore::new()`，而 `store.rs` 只提供 `with_capacity()`——属 Agent-C 半成品中间态。 |
+| **受阻根因** | PLAN §3.S4 第 5 条要求离线渲染「**复用同一套 Rust DSP 图**，走 `OfflineDriver`」。而 `src/engine/`（`graph.rs` / `node.rs` / `AudioBuffer` / `DspNode`）**尚不存在**——仓库真实状态是 S0 骨架。在无图可复用的情况下「实现 S4」，等于凭空写出**第二套 DSP**，正是该条明文禁止的架构漂移。另：PDC（S4 第 1 条）的补偿对象是 `mixer/graph.rs` 的路由，而 `mixer/` 正由 Agent-D 独占写入中。 |
+| **为何不硬上** | `lib.rs` · `Cargo.toml` · `ffi/**` 被 PLAN §4.2 第 3 条与本文档开头定为**同一时刻只能有一个写者**。此刻对这三个文件写入 = 与活跃写者竞争，会**静默覆盖 Agent-C/Agent-D 的成果**，且违反「先登记后修改、后改」的串行纪律。 |
+| **已做的无损动作** | 1. 已把并行会话的在途成果**提交入 git**（`70724a9`），确保任何一方的工作都不会因会话中断而丢失；2. 登记本条，供后续 Agent-A 接手。 |
+| **解除阻塞的条件** | `src/engine/` 图结构（`DspNode`、`AudioBuffer`、拓扑）落地且**稳定**；`src/mixer/graph.rs` 的路由与效果槽延迟查询可用；`cargo check` 恢复绿灯；且确认当前无其它会话正在写 `lib.rs` / `Cargo.toml` / `ffi/`。 |
+| **回滚方式** | 无代码改动，无需回滚。本条为**状态记录**，按登记规则第 3 条不删除；解除后追加新条目说明进度。 |
+| **状态** | 🔴 阻塞（等待 S1 图结构 + 共享文件让出） |
+
+> **给下一个 Agent-A 会话的交接**：`docs/PLAN_DAW_PARITY.md` §3.S1.0 **前置项 A 已完成**
+> （`[profile.release]` 已移除 `panic = "abort"`，并有 `guard()` + `zenith_panic_probe()` 与
+> 5 项验收测试，见 `src/lib.rs`），但**尚未提交为独立条目、`ABI_VERSION` 仍为 `0.1.0`**。
+> 前置项 B（34 个调用点迁到 `AudioEngine` 适配层）与 S1.1 引擎主体**均未开工**。
+> 因此 S4 前置链条实际为：**S1.0-B → S1.1 图 → S3 mixer → S4**。
