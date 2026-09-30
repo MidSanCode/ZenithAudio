@@ -32,13 +32,23 @@
 //! └── graph.rs         topology → topology validation, cycle rejection
 //! ```
 
+pub mod bus;
 pub mod channel;
+pub mod effect_chain;
+pub mod graph;
 pub mod meter;
 pub mod pan_law;
+pub mod send;
+pub mod strip;
 
+pub use bus::{Bus, BusKind, MasterBus};
 pub use channel::{Channel, ChannelId, ChannelRole};
+pub use effect_chain::{EffectChain, EffectSlot, MAX_EFFECT_SLOTS};
+pub use graph::{MixerGraph, MixerTopologyError, MAX_GROUP_DEPTH};
 pub use meter::{Meter, MeterSnapshot};
 pub use pan_law::PanLaw;
+pub use send::{Send, SendBank, SendTap, MAX_SENDS_PER_CHANNEL};
+pub use strip::{ChannelStrip, StripBuffers};
 
 /// Insert channels a project gets by default (PLAN §3.S3 item 1).
 pub const DEFAULT_INSERT_CHANNELS: usize = 64;
