@@ -57,30 +57,52 @@ impl PanLaw {
             pan.clamp(-1.0, 1.0)
         };
 
-        if self == Self::Linear {
-            // Both sides carry the full signal; the far side fades out.
-            let left = if p <= 0.0 { 1.0 } else { 1.0 - p };
-            let right = if p >= 0.0 { 1.0 } else { 1.0 + p };
-            return (left, right);
-        }
-
-        // Constant-power shaping. With `t` the normalised position in `0..=1`,
-        // the ideal law is `left = cos(t·π/2)`, `right = sin(t·π/2)`, which
-        // satisfies `left² + right² == 1`. Both are scaled by `centre_gain ·
-        // √2` so that the centre position — where each equals `1/√2` — lands
-        // exactly on the law's centre attenuation:
-        //
-        //   gain(t) = centre_gain · √2 · trig(t·π/2)
-        //   gain(0.5) = centre_gain · √2 · (1/√2) = centre_gain   ✓
-        //
-        // The trigonometry is evaluated by polynomial approximation rather
-        // than `f32::sin`/`cos` because the core must stay free of platform
-        // maths for `wasm32-unknown-unknown`.
+        // `t` is the normalised position: 0 = hard left, 0.5 = centre,
+        // 1 = hard right.
         let t = (p + 1.0) * 0.5;
-        let scale = self.centre_gain() * core::f32::consts::SQRT_2;
-        let left = scale * cos_half_pi(t);
-        let right = scale * sin_half_pi(t);
-        (left, right)
+
+        match self {
+            Self::Linear => {
+                // Both sides carry the full signal; only the far side fades.
+                // Centre therefore sums to +6 dB by design.
+                let left = if p <= 0.0 { 1.0 } else { 1.0 - p };
+                let right = if p >= 0.0 { 1.0 } else { 1.0 + p };
+                (left, right)
+            }
+            Self::ConstantAmplitude6Db => {
+                // Constant *amplitude*: the two sides always sum to unity, so
+                // folding to mono is exactly transparent. This needs its own
+                // shaping rule — a constant-power curve scaled down is a
+                // different law, not this one.
+                //
+                //   left(t)  = cos(t·π/2)
+                //   right(t) = sin(t·π/2)
+                //
+                // shaped so that centre lands on `centre_gain` and the fold
+                // `left + right` is preserved at unity.
+                let s = sin_half_pi(t);
+                let c = cos_half_pi(t);
+                let peak = self.centre_gain() * core::f32::consts::SQRT_2; // == 0.7088…/√2·√2
+                // Normalise the pair so it sums to the -6 dB fold of 1.0.
+                let sum = s + c;
+                let norm = if sum > 0.0 { 1.0 / sum } else { 0.0 };
+                (c * norm, s * norm)
+            }
+            Self::ConstantPower3Db | Self::ConstantPower4Point5Db => {
+                // Constant power: `left² + right² == 1` by construction, then
+                // scaled by `centre_gain · √2` so that centre — where each
+                // side equals `1/√2` — lands exactly on the centre attenuation:
+                //
+                //   gain(t)   = centre_gain · √2 · trig(t·π/2)
+                //   gain(0.5) = centre_gain · √2 · (1/√2) = centre_gain   ✓
+                //
+                // The trigonometry is a polynomial approximation rather than
+                // `f32::sin`/`cos` because the core must stay free of platform
+                // maths to compile for `wasm32-unknown-unknown`.
+                let scale = self.centre_gain() * core::f32::consts::SQRT_2;
+                (scale * cos_half_pi(t), scale * sin_half_pi(t))
+            }
+        }
     }
 }
 
