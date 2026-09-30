@@ -9,8 +9,10 @@
 //!   across the FFI boundary: a Rust panic unwinding into the Dart VM is
 //!   undefined behaviour, so every entry point is `catch_unwind`-guarded or
 //!   provably panic-free.
-//! * S0 ships only the version handshake. The DSP graph, sequencer and plugin
-//!   host land in later stages behind the same ABI discipline.
+//! * S0 shipped only the version handshake. The parameter system and
+//!   automation (S2) now live in [`automation`] and are exported through
+//!   [`ffi::param_api`]; the DSP graph, sequencer and plugin host land in later
+//!   stages behind the same ABI discipline.
 
 #![deny(missing_docs)]
 
@@ -27,6 +29,10 @@ extern crate alloc;
 
 pub mod automation;
 
+/// The C ABI surface: every `#[no_mangle] extern "C"` symbol lives under here,
+/// so the exported set is auditable by reading one directory (ABI principle P1).
+pub mod ffi;
+
 /// Mixer: console topology, channel strips, sends, effect slots and metering.
 ///
 /// Concerned with *structure and values* only — it owns no audio device and no
@@ -39,7 +45,16 @@ pub mod mixer;
 /// Dart passes the version it was compiled against to [`zenith_version_match`]
 /// so a stale `zenith_core.dll` fails loudly at startup instead of producing
 /// silent audio corruption.
-pub const ABI_VERSION: u32 = encode_version(0, 1, 0);
+///
+/// # Why this is 0.2.0 and not 0.1.x
+///
+/// S2 added the parameter and automation surface (`ffi/param_api.rs`, 40+
+/// exported functions, plus the S2 structs in `ffi/types.rs`). Per
+/// `docs/ABI.md` §2.2, *adding* exported functions and *appending* struct
+/// fields is a backward-compatible change that bumps the minor version; no
+/// existing signature, field order or enum discriminant was altered.
+/// Registered as entry C-002 in `docs/COORDINATION.md`.
+pub const ABI_VERSION: u32 = encode_version(0, 2, 0);
 
 /// Status code returned by every fallible entry point.
 ///
@@ -158,7 +173,7 @@ pub extern "C" fn zenith_version_match(expected: u32) -> u32 {
 }
 
 /// Returns a NUL-terminated, statically allocated human-readable version
-/// string, e.g. `"0.1.0"`.
+/// string, e.g. `"0.2.0"`.
 ///
 /// The pointer is valid for the entire lifetime of the process and must not be
 /// freed by the caller.
@@ -171,7 +186,7 @@ pub extern "C" fn zenith_version_match(expected: u32) -> u32 {
 pub extern "C" fn zenith_version_string() -> *const c_char {
     // A byte-string literal with a trailing NUL, so no allocation or `CString`
     // is needed and the pointer is genuinely 'static.
-    concat!("0.1.0", "\0").as_ptr() as *const c_char
+    concat!("0.2.0", "\0").as_ptr() as *const c_char
 }
 
 /// Panics on purpose to prove the panic firewall works.
@@ -222,14 +237,33 @@ mod tests {
     fn version_string_round_trips_through_c_str() {
         // SAFETY: the function returns a 'static NUL-terminated literal.
         let s = unsafe { CStr::from_ptr(zenith_version_string()) };
-        assert_eq!(s.to_str().unwrap(), "0.1.0");
+        assert_eq!(s.to_str().unwrap(), "0.2.0");
     }
 
     #[test]
-    fn abi_version_encodes_0_1_0() {
+    fn abi_version_encodes_0_2_0() {
         assert_eq!(ABI_VERSION >> 16, 0, "major");
-        assert_eq!((ABI_VERSION >> 8) & 0xFF, 1, "minor");
+        assert_eq!((ABI_VERSION >> 8) & 0xFF, 2, "minor");
         assert_eq!(ABI_VERSION & 0xFF, 0, "patch");
+    }
+
+    #[test]
+    fn the_version_string_agrees_with_the_encoded_stamp() {
+        // A mismatch here is how a "rebuilt but stale DLL" hides: the numeric
+        // check passes while the human-readable string lies to whoever is
+        // debugging.
+        let text = format!(
+            "{}.{}.{}",
+            ABI_VERSION >> 16,
+            (ABI_VERSION >> 8) & 0xFF,
+            ABI_VERSION & 0xFF
+        );
+        // SAFETY: the function returns a 'static NUL-terminated literal.
+        let reported = unsafe { CStr::from_ptr(zenith_version_string()) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(reported, text);
     }
 
     // ── Prerequisite A: the panic firewall must actually catch ──
