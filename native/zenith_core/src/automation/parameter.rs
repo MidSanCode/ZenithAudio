@@ -261,13 +261,18 @@ impl ParameterDescriptor {
 
     /// Clamps `value` into `[min_value, max_value]`.
     ///
-    /// Non-finite input maps to `default_value`: a `NaN` arriving from a
-    /// corrupt project file or a misbehaving modulator must not propagate into
-    /// the audio signal, where it would silence the bus and be very hard to
-    /// trace back.
+    /// `NaN` maps to `default_value`, because a `NaN` arriving from a corrupt
+    /// project file or a misbehaving modulator must not propagate into the
+    /// audio signal, where it would silence the bus and be very hard to trace
+    /// back to its source.
+    ///
+    /// Infinities are *not* treated as garbage: they clamp to the nearest
+    /// bound, which is what a caller means by "as loud as possible" and what
+    /// keeps a modulator that has run away from silently resetting the
+    /// parameter to its default instead of pinning it.
     #[must_use]
     pub fn clamp(&self, value: f32) -> f32 {
-        if !value.is_finite() {
+        if value.is_nan() {
             return self.default_value;
         }
         if value < self.min_value {

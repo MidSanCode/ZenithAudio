@@ -49,12 +49,13 @@ pub mod store;
 pub use clip::{AutomationClip, AutomationPoint, CurveKind};
 pub use lane::{Lane, LaneProblem, LaneSet, RecordMode};
 pub use modulator::{
-    EnvelopeGenerator, EnvelopeStage, Lfo, LfoShape, LfoTriggerMode, ModulatorBank, PeakFollower,
+    one_pole_coeff, one_pole_coeff_for_elapsed, EnvelopeGenerator, EnvelopeStage, Lfo, LfoShape,
+    LfoTriggerMode, ModulatorBank, PeakFollower,
 };
 pub use parameter::{
     ParameterAddress, ParameterDescriptor, ParameterKind, ParameterUnit,
 };
-pub use player::{AutomationPlayer, PlayerStats, TouchAction};
+pub use player::{AutomationPlayer, PlayerStats, TouchAction, MAX_TRACKED_PARAMETERS};
 pub use recorder::{RecordOutcome, Recorder, Take};
 pub use store::{ParameterStore, DEFAULT_PARAMETER_CAPACITY, MAX_SMOOTHING_MS, MIN_SMOOTHING_MS};
 

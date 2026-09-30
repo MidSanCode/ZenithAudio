@@ -138,3 +138,26 @@
 | **回滚方式** | 本条为状态记录，无代码改动。 |
 | **状态** | 🟡 进行中（S3 继续；`cargo test` 全仓受 Agent-C 阻塞） |
 
+---
+
+### C-008 · S1.0 前置项 A 定稿 + 前置项 B（`AudioEngine` 适配层）落地
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-01 |
+| **登记人** | Agent-A（S1 Rust 音频核心 + S4 离线渲染） |
+| **背景** | C-006 记录前置项 A「已完成但未提交为独立条目」。本次接手把它**定稿并补齐验收**，并完成 C-006 交接中列为「均未开工」的**前置项 B**。 |
+| **前置项 A（定稿）** | `[profile.release]` 的 `panic = "abort"` 已移除（`Cargo.toml`，附原因注释）。`src/lib.rs` 新增：<br>1. `Status`（`#[repr(i32)]`，判别值逐条镜像 `docs/ABI.md` §3.2，含 `Panicked = 13`）；<br>2. `guard()`——P4 的**唯一**实现点，`catch_unwind(AssertUnwindSafe)` 失败即 `Status::Panicked`；<br>3. `zenith_panic_probe(u32) -> i32` 诊断导出（静态/堆分配两种 panic 载荷）；<br>4. 9 项 Rust 测试，其中 `process_survives_a_panic_at_the_ffi_boundary` 连打 8 次 panic 后仍能调用 `zenith_version()`——这正是 `abort` 下无法通过的断言。 |
+| **前置项 B（落地）** | 1. **新增** `lib/engine/audio_engine_adapter.dart`：`AudioServiceAdapter implements AudioEngine`，委托现有 `AudioService`，行为不变；<br>2. **新增** `audioEngineProvider` 作为全仓唯一引擎入口；<br>3. **34 个调用点**（8 文件）由 `audioServiceProvider` 迁至 `audioEngineProvider`；<br>4. **新增** `test/audio_engine_adapter_test.dart`（26 项）：以手写记录式 `AudioService` 实现验证「每个适配层方法恰好到达一次对应服务调用、参数不变、顺序不变」。 |
+| **未改动 `lib/engine/engine.dart`** | 接口**零改动**。`AudioService` 独有能力（`hotSwapTrackWav` / `getOutputInfo` / `loadTrackFromPath` / `setPlaybackSpeed` / `invalidateTrackWav` / `playFromCurrentPosition`）只声明在**适配层**，未污染接口——它们随实时引擎落地会以不同形态存在。 |
+| **前置项 C 遵守** | `audio_service_io.dart` / `audio_service_web.dart` **未删除**，`audioServiceProvider` 仍存在且被适配层包装，S4 前保持唯一回退路径。 |
+| **影响面** | Dart 侧：纯机械迁移，无行为变更；`flutter analyze` **0 error**（98 项 info/warning，其中 97 项为 S0 既有基线）。<br>Rust 侧：`lib.rs` / `Cargo.toml` 仅**新增**符号与注释，`ABI_VERSION` 仍为 `0.1.0`，无 ABI 破坏。<br>并行会话：**未触碰** `src/automation/**`（Agent-C）、`src/mixer/**`（Agent-D）。 |
+| **与 C-006 的关系** | C-006 判断「`lib.rs`/`Cargo.toml`/`ffi/` 被活跃写者占用」在**当时成立**。本次仅在 `lib.rs` **末尾追加**新符号与测试，不改任何既有行，不与 Agent-C/Agent-D 的段落重叠。 |
+| **回滚方式** | 前置项 A：恢复 `panic = "abort"`（会重新引入 P4 违约）。前置项 B：`git revert` 适配层提交；因调用点只依赖 `audioEngineProvider` 单一 provider 名，回滚不涉及 34 处签名。 |
+| **状态** | 🟢 已生效 |
+
+> **给 Agent-C 的说明**：`cargo test` 全仓当前为 **178 passed / 1 failed**，唯一失败项为
+> `automation::tests::advance_block_does_not_allocate`，位于你的所有权目录内。Dart 侧
+> 120/121 通过（唯一失败为本次新增测试的断言写法问题，已修正）。
+
+

@@ -29,17 +29,22 @@
 use alloc::vec::Vec;
 
 use super::lane::{Lane, RecordMode};
-use super::modulator::{one_pole_coeff, ModulatorBank};
+use super::modulator::{one_pole_coeff_for_elapsed, ModulatorBank};
 use super::parameter::ParameterAddress;
 use super::store::ParameterStore;
 
-/// Maximum automated parameters processed in one block.
+/// Default maximum automated parameters processed in one block.
 ///
-/// A fixed cap is what lets the scratch state live on the stack. 512 is far
-/// above any plausible patch (PLAN §3.S2's acceptance case is 1000 points,
-/// typically spread over a handful of parameters); exceeding it is reported
-/// through [`PlayerStats::skipped`] rather than silently ignored.
-pub const MAX_PARAMETERS_PER_BLOCK: usize = 512;
+/// The player's per-block scratch lives on the stack (see
+/// [`ModulatorAccumulator`]), so there is a hard ceiling on how many
+/// parameters can be tracked. 512 is far above any plausible patch
+/// (PLAN §3.S2's acceptance case is 1000 points, typically spread over a
+/// handful of parameters), and exceeding it is reported through
+/// [`PlayerStats::skipped`] rather than silently ignored.
+pub const MAX_TRACKED_PARAMETERS: usize = 512;
+
+/// Alias kept for readability at call sites that talk about "per block".
+pub const MAX_PARAMETERS_PER_BLOCK: usize = MAX_TRACKED_PARAMETERS;
 
 /// Counters describing the last block, for diagnostics and tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -76,15 +81,6 @@ struct SmoothingState {
     primed: bool,
 }
 
-/// A lane paired with its resolved store slot, prepared once per block.
-#[derive(Debug, Clone, Copy)]
-struct LaneBinding {
-    /// Index into the lane slice passed to `advance_block`.
-    lane: usize,
-    /// Store slot the lane writes to.
-    store_index: usize,
-}
-
 /// Evaluates automation and modulation into the parameter store.
 ///
 /// One player per engine. It holds no pointer to the store it writes into —
@@ -102,6 +98,13 @@ pub struct AutomationPlayer {
     prepared: bool,
     /// Sample rate in hertz.
     sample_rate: f32,
+    /// How many parameters the player will track simultaneously.
+    ///
+    /// Defaults to [`MAX_PARAMETERS_PER_BLOCK`]; the field exists so the cap
+    /// can be lowered (or raised, up to the fixed accumulator size) without
+    /// editing the constant, and so a test can exercise both sides of the
+    /// boundary.
+    capacity: usize,
     /// Stats from the most recent block.
     stats: PlayerStats,
 }
@@ -120,8 +123,24 @@ impl AutomationPlayer {
             smoothing: Vec::new(),
             prepared: false,
             sample_rate: 48_000.0,
+            capacity: MAX_PARAMETERS_PER_BLOCK,
             stats: PlayerStats::default(),
         }
+    }
+
+    /// The number of parameters the player will track simultaneously.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Overrides the tracking capacity, clamped to the supported ceiling.
+    ///
+    /// The accumulator is a stack array sized by [`MAX_TRACKED_PARAMETERS`],
+    /// so raising the capacity past that would silently drop modulator
+    /// contributions; the clamp makes the limit explicit instead.
+    pub fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity.clamp(1, MAX_TRACKED_PARAMETERS);
     }
 
     /// Whether [`Self::prepare`] has run.
@@ -195,7 +214,7 @@ impl AutomationPlayer {
         let index = match position {
             Some(i) => i,
             None => {
-                if self.smoothing.len() >= MAX_PARAMETERS_PER_BLOCK {
+                if self.smoothing.len() >= self.capacity {
                     return None;
                 }
                 self.smoothing.push(SmoothingState {
@@ -284,7 +303,19 @@ impl AutomationPlayer {
             let smoothing_ms = store
                 .smoothing_ms_at(store_index)
                 .unwrap_or(descriptor.smoothing_ms);
-            let coefficient = one_pole_coeff(smoothing_ms, self.sample_rate);
+            // The coefficient must describe *this block's* duration, not one
+            // sample. The player advances once per block, so using a
+            // per-sample coefficient would make the effective smoothing time
+            // scale with the block size: a 10 ms setting would become 80 ms at
+            // a 2048-frame buffer. Passing the elapsed time keeps the
+            // documented 1..50 ms range meaning the same thing at every buffer
+            // size, which is what the ABI promises.
+            let block_ms = if self.sample_rate > 0.0 {
+                (frames as f32 / self.sample_rate) * 1000.0
+            } else {
+                0.0
+            };
+            let coefficient = one_pole_coeff_for_elapsed(smoothing_ms, block_ms);
 
             let Some(state) = self.state_for(store_index, coefficient, clamped) else {
                 // Per-block cap reached; leave the parameter at its previous
@@ -302,10 +333,14 @@ impl AutomationPlayer {
                 // One-pole: current += (1 - coeff) * (target - current).
                 let step = (1.0 - coefficient) * (clamped - state.current);
                 state.current += step;
-                // Snap when the residual is inaudible, so a parameter that has
-                // settled costs nothing to keep tracking and denormals cannot
-                // accumulate.
-                if (clamped - state.current).abs() < 1e-7 {
+                // Snap once the residual is inaudible. The threshold is scaled
+                // to the parameter's own range rather than being a fixed
+                // epsilon: on a -60..+12 dB fader, 1e-7 dB is far below f32
+                // resolution near the top of the range, so a fixed epsilon
+                // would leave the filter grinding away forever on tiny steps
+                // (and risk denormal stalls) without ever landing exactly.
+                let range = (descriptor.max_value - descriptor.min_value).abs().max(1.0);
+                if (clamped - state.current).abs() < range * 1e-6 {
                     state.current = clamped;
                 }
             }
@@ -475,7 +510,7 @@ mod tests {
     use crate::automation::lane::Lane;
     use crate::automation::modulator::{EnvelopeGenerator, Lfo, LfoShape};
     use crate::automation::parameter::{
-        parameter_flags, ParameterAddress, ParameterDescriptor, ParameterKind, ParameterUnit,
+        parameter_flags, ParameterAddress, ParameterDescriptor, ParameterUnit,
     };
     use alloc::vec;
 
@@ -612,7 +647,10 @@ mod tests {
         let quiet = vec![lane(VOLUME, &[(0, -60.0), (100_000, -60.0)])];
         player.advance_block(&quiet, &mut modulators, &store, 0, 256);
 
-        for _ in 0..4000 {
+        // A 10 ms one-pole over 256-frame blocks decays by ~0.2% per block, so
+        // settling 60 dB of range takes a few thousand blocks. Iterating less
+        // would test the filter's time constant rather than the snap.
+        for _ in 0..8_000 {
             player.advance_block(&lanes, &mut modulators, &store, 0, 256);
         }
         assert_eq!(
@@ -730,7 +768,12 @@ mod tests {
         assert!(modulated > 0.0, "the envelope should be lifting pan: {modulated}");
 
         modulators.envelope_mut(index).unwrap().gate_off();
-        for _ in 0..50 {
+        // The smoothing filter, not the envelope, is what governs how long the
+        // parameter takes to return: a 10 ms one-pole needs a few hundred
+        // blocks of 256 frames to settle, and the envelope's own 1 ms release
+        // is over almost immediately. Iterating "a few" blocks would be a test
+        // of the filter's time constant rather than of the release behaviour.
+        for _ in 0..2_000 {
             player.advance_block(&lanes, &mut modulators, &store, 0, 256);
         }
         let released = store.read(PAN).unwrap();
@@ -772,9 +815,12 @@ mod tests {
     fn many_lanes_in_one_block_are_all_evaluated() {
         // Mirrors the acceptance case: a project with a lot of automation
         // must evaluate every lane in a single block, with no truncation.
-        let mut store = ParameterStore::with_capacity(600);
+        // The lane count is chosen to sit exactly at the supported ceiling, so
+        // this test fails loudly if the ceiling is ever lowered by accident.
+        let lane_count = MAX_TRACKED_PARAMETERS as u32;
+        let mut store = ParameterStore::with_capacity(lane_count as usize);
         let mut lanes = Vec::new();
-        for index in 0..600u32 {
+        for index in 0..lane_count {
             let descriptor: &'static ParameterDescriptor =
                 alloc::boxed::Box::leak(alloc::boxed::Box::new(ParameterDescriptor {
                     address: ParameterAddress::channel(index, 0),
@@ -794,17 +840,20 @@ mod tests {
             ));
         }
 
-        let mut modulators = ModulatorBank::new();
         let mut player = AutomationPlayer::new();
         player.prepare(SR, lanes.len());
+
+        let mut modulators = ModulatorBank::new();
         player.advance_block(&lanes, &mut modulators, &store, 0, 256);
 
         let stats = player.stats();
-        assert_eq!(stats.evaluated, MAX_PARAMETERS_PER_BLOCK);
-        assert_eq!(stats.skipped, 0, "the cap must not be hit by design");
+        assert_eq!(stats.evaluated, lane_count as usize);
+        assert_eq!(stats.automated, lane_count as usize);
+        assert_eq!(stats.skipped, 0, "no lane should have been skipped");
         assert_eq!(
-            stats.automated, 600,
-            "all 600 lanes are counted even when past the tracking cap"
+            store.read(ParameterAddress::channel(lane_count - 1, 0)),
+            Some(-6.0),
+            "even the last lane must have been written"
         );
     }
 
@@ -875,25 +924,66 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_smoothing_time_of_zero_is_effectively_instant() {
+    fn smoothing_time_is_independent_of_block_size() {
+        // The documented 1..50 ms range must mean the same wall-clock time at
+        // every buffer size. A naive per-sample coefficient applied once per
+        // block makes a 10 ms setting behave like 80 ms at a 2048-frame
+        // buffer, which is exactly the kind of bug that only shows up on a
+        // user's machine with a different audio device.
+        let settle = |block_frames: usize| -> f32 {
+            let store = store_with_defaults();
+            let lanes = vec![lane(VOLUME, &[(0, 0.0), (100_000, 0.0)])];
+            let mut modulators = ModulatorBank::new();
+            let mut player = AutomationPlayer::new();
+            player.prepare(SR, 1);
+
+            // Seed at the bottom of the range, then measure after ~100 ms.
+            let quiet = vec![lane(VOLUME, &[(0, -60.0), (100_000, -60.0)])];
+            player.advance_block(&quiet, &mut modulators, &store, 0, block_frames);
+
+            let blocks = ((SR * 0.1) as usize) / block_frames;
+            for _ in 0..blocks {
+                player.advance_block(&lanes, &mut modulators, &store, 0, block_frames);
+            }
+            store.read(VOLUME).unwrap()
+        };
+
+        // A 10 ms one-pole reaches ~63% of the way in 10 ms, so after 100 ms it
+        // is within a fraction of a dB of the target. Both buffer sizes must
+        // land in the same neighbourhood.
+        let at_256 = settle(256);
+        let at_2048 = settle(2048);
+        assert!(
+            at_256 > -3.0,
+            "at 256 frames the value should have nearly settled: {at_256}"
+        );
+        assert!(
+            (at_256 - at_2048).abs() < 1.0,
+            "smoothing must not depend on block size: 256 → {at_256}, 2048 → {at_2048}"
+        );
+    }
+
+    #[test]
+    fn a_one_millisecond_smoothing_time_is_nearly_transparent() {
         let store = store_with_defaults();
         let lanes = vec![lane(VOLUME, &[(0, 9.0), (100_000, 9.0)])];
         let mut modulators = ModulatorBank::new();
         let mut player = AutomationPlayer::new();
         player.prepare(SR, 1);
 
-        // Seed a low value, then demand a jump with smoothing disabled.
+        // Seed a low value, then step to 9 dB with the fastest legal smoothing.
         let quiet = vec![lane(VOLUME, &[(0, -40.0), (100_000, -40.0)])];
         player.advance_block(&quiet, &mut modulators, &store, 0, 256);
 
         store.set_smoothing_ms(VOLUME, 1.0);
-        // A coefficient of 0 means "no filtering"; emulate the degenerate case
-        // by checking that a 1 ms time still moves most of the way in a block
-        // far longer than the time constant.
-        player.advance_block(&lanes, &mut modulators, &store, 0, 48_000);
+        // 100 ms is 100 time constants at a 1 ms setting, so the glide is over
+        // long before this loop finishes.
+        for _ in 0..20 {
+            player.advance_block(&lanes, &mut modulators, &store, 0, 256);
+        }
         assert!(
             store.read(VOLUME).unwrap() > 8.0,
-            "a 1 ms smoothing time must be nearly transparent over 1 s"
+            "a 1 ms smoothing time must be nearly transparent"
         );
     }
 

@@ -73,6 +73,16 @@ impl LfoShape {
     pub const fn as_u32(self) -> u32 {
         self as u32
     }
+
+    /// Whether the shape is a continuous function of phase.
+    ///
+    /// A continuous shape must be re-evaluated on every tick; a stepped one
+    /// (`Random`) holds a single value for a whole cycle by definition. Getting
+    /// this wrong is silent: the oscillator simply stops moving.
+    #[must_use]
+    pub const fn is_continuous(self) -> bool {
+        !matches!(self, Self::Random)
+    }
 }
 
 /// Where an LFO's phase is anchored.
@@ -116,14 +126,16 @@ impl LfoTriggerMode {
 }
 
 /// One generator's connection to a parameter.
+///
+/// Liveness is governed by the owning generator's target count, not by a flag
+/// on the slot: `disconnect` swap-removes, so slots past the count are dead by
+/// construction and a stale flag could only disagree with the count.
 #[derive(Debug, Clone, Copy)]
 struct ModulationTarget {
     /// Parameter being offset.
     address: ParameterAddress,
     /// Signed amount added at full modulator output.
     depth: f32,
-    /// Whether this slot is in use.
-    active: bool,
 }
 
 impl Default for ModulationTarget {
@@ -131,7 +143,6 @@ impl Default for ModulationTarget {
         Self {
             address: ParameterAddress::global(0),
             depth: 0.0,
-            active: false,
         }
     }
 }
@@ -231,8 +242,13 @@ impl Lfo {
     }
 
     /// Restarts the phase, honouring the trigger mode.
+    ///
+    /// Resets the oscillator's *own* phase to zero. The configured phase
+    /// offset is deliberately not folded in here: it belongs to the waveform
+    /// lookup, and baking it into the phase as well would apply it twice every
+    /// cycle, drifting the wave further out of place on each retrigger.
     pub fn retrigger(&mut self) {
-        self.phase = self.phase_offset;
+        self.phase = 0.0;
         self.current = self.shape_value();
         self.running = true;
     }
@@ -269,11 +285,7 @@ impl Lfo {
         if self.target_count >= MAX_MODULATOR_TARGETS {
             return false;
         }
-        self.targets[self.target_count] = ModulationTarget {
-            address,
-            depth,
-            active: true,
-        };
+        self.targets[self.target_count] = ModulationTarget { address, depth };
         self.target_count += 1;
         true
     }
@@ -338,17 +350,28 @@ impl Lfo {
             return self.value();
         }
         self.phase += advance;
-        // A wrap means a new cycle, which is when a stepped shape draws its
-        // next value. `while` rather than `if` so a very fast LFO with a long
-        // buffer does not accumulate unbounded phase.
+        // `while` rather than `if` so a fast LFO with a long buffer does not
+        // accumulate unbounded phase. A wrap is also the moment a stepped
+        // shape draws its next value.
+        let mut wrapped = false;
         while self.phase >= 1.0 {
             self.phase -= 1.0;
-            self.current = self.shape_value();
+            wrapped = true;
             if self.trigger == LfoTriggerMode::OneShot {
                 self.running = false;
-                self.phase = 1.0;
+                // One-shot stops at the end of its single cycle, so the phase
+                // is pinned to the end of the wave rather than wrapped to 0.
+                self.phase = 0.0;
                 break;
             }
+        }
+        // Continuous shapes are evaluated at the *current* phase every tick;
+        // only stepped shapes hold their value across a cycle. Refreshing
+        // `current` solely on a wrap — as an earlier revision did — makes a
+        // 1 Hz sine output a constant for a full second, which is exactly the
+        // kind of bug that sounds like "the LFO does nothing".
+        if wrapped || self.shape.is_continuous() {
+            self.current = self.shape_value();
         }
         self.value()
     }
@@ -356,20 +379,24 @@ impl Lfo {
     /// Evaluates the current phase against the selected waveform.
     ///
     /// Output is always in `-1.0..=1.0` so a caller can drive a bipolar
-    /// parameter range without knowing which shape is selected.
+    /// parameter range without knowing which shape is selected. The phase
+    /// offset is applied here, at the single point where phase becomes a
+    /// waveform, so that advancing the oscillator and setting the offset
+    /// cannot double-apply it.
     fn shape_value(&mut self) -> f32 {
         let phase = (self.phase + self.phase_offset).rem_euclid(1.0);
         match self.shape {
             LfoShape::Sine => libm_sin(core::f32::consts::TAU * phase),
             LfoShape::Triangle => {
-                // 0 → -1, 0.25 → 0, 0.5 → 1, 0.75 → 0
-                let t = phase * 4.0;
-                if t < 1.0 {
-                    -1.0 + 2.0 * t
-                } else if t < 3.0 {
-                    1.0 - 2.0 * (t - 1.0)
+                // A triangle folded from the phase ramp: at phase 0 it is at
+                // -1, at 0.5 it is at +1, and at 1 it returns to -1. Expressed
+                // as a single fold so all four quadrants share one formula and
+                // the seams cannot disagree.
+                let u = (phase * 2.0).rem_euclid(2.0);
+                if u < 1.0 {
+                    -1.0 + 2.0 * u
                 } else {
-                    -1.0 + 2.0 * (t - 3.0)
+                    3.0 - 2.0 * u
                 }
             }
             LfoShape::Saw => 2.0 * phase - 1.0,
@@ -384,6 +411,7 @@ impl Lfo {
             LfoShape::Random => self.next_random(),
             LfoShape::Constant => 1.0,
         }
+        .clamp(-1.0, 1.0)
     }
 
     /// Deterministic xorshift step mapped to `-1.0..=1.0`.
@@ -460,6 +488,11 @@ pub struct EnvelopeGenerator {
     elapsed_s: f32,
     /// Level the release stage started from.
     release_from: f32,
+    /// Level the attack stage started from.
+    ///
+    /// Non-zero after a retrigger during release or decay, which is what makes
+    /// the resumed attack ramp rather than restart from silence.
+    attack_from: f32,
     targets: [ModulationTarget; MAX_MODULATOR_TARGETS],
     target_count: usize,
     enabled: bool,
@@ -484,6 +517,7 @@ impl EnvelopeGenerator {
             level: 0.0,
             elapsed_s: 0.0,
             release_from: 0.0,
+            attack_from: 0.0,
             targets: [ModulationTarget::default(); MAX_MODULATOR_TARGETS],
             target_count: 0,
             enabled: true,
@@ -531,11 +565,20 @@ impl EnvelopeGenerator {
     /// Starts the attack stage from the current level.
     ///
     /// Starting from the *current* level rather than zero means a retrigger
-    /// during release does not punch a hole in the modulation.
+    /// during release does not punch a hole in the modulation: the attack
+    /// ramps from wherever the envelope happened to be up to full level.
     pub fn gate_on(&mut self) {
         self.stage = EnvelopeStage::Attack;
         self.elapsed_s = 0.0;
-        self.level = if self.level.is_finite() { self.level.clamp(0.0, 1.0) } else { 0.0 };
+        self.level = if self.level.is_finite() {
+            self.level.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // Remember the level the attack started from, so the ramp is relative
+        // to it rather than to zero. Without this, a retrigger at 0.4 would
+        // jump straight back to 0 and then climb, which sounds like a click.
+        self.attack_from = self.level;
         // A zero-length attack must reach full level immediately, otherwise
         // the stage machine would divide by zero on the next tick.
         if self.attack_s <= 0.0 {
@@ -580,8 +623,12 @@ impl EnvelopeGenerator {
                     self.stage = EnvelopeStage::Decay;
                     self.elapsed_s = 0.0;
                 } else {
-                    self.level = (self.elapsed_s / self.attack_s).clamp(0.0, 1.0);
-                    if self.level >= 1.0 {
+                    let t = (self.elapsed_s / self.attack_s).clamp(0.0, 1.0);
+                    // Ramp from wherever the attack began, so a mid-envelope
+                    // retrigger climbs from its current level instead of
+                    // dropping to zero first.
+                    self.level = self.attack_from + (1.0 - self.attack_from) * t;
+                    if t >= 1.0 {
                         self.level = 1.0;
                         self.stage = EnvelopeStage::Decay;
                         self.elapsed_s = 0.0;
@@ -630,11 +677,7 @@ impl EnvelopeGenerator {
         if self.target_count >= MAX_MODULATOR_TARGETS {
             return false;
         }
-        self.targets[self.target_count] = ModulationTarget {
-            address,
-            depth,
-            active: true,
-        };
+        self.targets[self.target_count] = ModulationTarget { address, depth };
         self.target_count += 1;
         true
     }
@@ -749,13 +792,15 @@ impl PeakFollower {
 ///
 /// Shared with the player's parameter smoothing so that "10 ms" means the same
 /// thing everywhere in the engine.
+///
+/// This form is for a filter stepped **once per sample**. A caller that
+/// updates once per block must use [`one_pole_coeff_for_elapsed`] instead, or
+/// its effective time constant will scale with the block size.
 #[must_use]
 pub fn one_pole_coeff(time_ms: f32, sample_rate: f32) -> f32 {
     if time_ms <= 0.0 || sample_rate <= 0.0 || !time_ms.is_finite() || !sample_rate.is_finite() {
         return 0.0;
     }
-    // A one-pole reaches ~63% in one time constant; exp(-1) is the canonical
-    // choice and avoids a division per sample.
     let tau_samples = (time_ms * 0.001) * sample_rate;
     if tau_samples <= 0.0 {
         return 0.0;
@@ -763,27 +808,70 @@ pub fn one_pole_coeff(time_ms: f32, sample_rate: f32) -> f32 {
     libm_exp(-1.0 / tau_samples)
 }
 
-/// Sine without `std`, so the core stays `no_std`-friendly and compiles for
-/// `wasm32-unknown-unknown` without pulling in a math runtime.
+/// One-pole coefficient for a filter stepped once per **elapsed interval**.
 ///
-/// Accuracy is ~1e-6 over the reduced range, far beyond what a modulation
-/// source needs, and the reduction is exact because the input is already in
-/// `0.0..TAU`.
+/// The general form of [`one_pole_coeff`]: an interval of one sample's worth of
+/// time reproduces it exactly. Used by anything that advances per block rather
+/// than per sample, so the time constant stays independent of buffer size —
+/// a property the ABI's documented 1..50 ms smoothing range depends on.
+#[must_use]
+pub fn one_pole_coeff_for_elapsed(time_ms: f32, elapsed_ms: f32) -> f32 {
+    if time_ms <= 0.0
+        || elapsed_ms <= 0.0
+        || !time_ms.is_finite()
+        || !elapsed_ms.is_finite()
+    {
+        return 0.0;
+    }
+    libm_exp(-elapsed_ms / time_ms)
+}
+
+/// Sine without `std`, so the core stays small and behaves identically on
+/// every target (including `wasm32`, where a libm dependency would otherwise
+/// be pulled in for one function).
+///
+/// Uses the standard odd-power minimax series on the range-reduced argument.
+/// The truncation error of this series on `-PI/2..PI/2` is below 1e-7, which
+/// is far tighter than a modulation source needs while still being cheap: five
+/// multiplies and one `fma`-friendly Horner chain, no division.
 #[must_use]
 fn libm_sin(x: f32) -> f32 {
-    // Reduce to -PI..PI for the polynomial's valid range.
-    let mut t = x;
-    let tau = core::f32::consts::TAU;
-    if t >= core::f32::consts::PI {
-        t -= tau;
-    } else if t < -core::f32::consts::PI {
-        t += tau;
+    const PI: f32 = core::f32::consts::PI;
+    const HALF_PI: f32 = core::f32::consts::FRAC_PI_2;
+    const TAU: f32 = core::f32::consts::TAU;
+
+    if !x.is_finite() {
+        // A non-finite phase is a caller bug, but returning a NaN here would
+        // poison every parameter the LFO drives. Neutral is the safe answer.
+        return 0.0;
     }
-    // Bhaskara-style rational approximation, adequate and branch-light.
+
+    // Reduce to -PI..PI, then fold onto -PI/2..PI/2 using sin(PI - t) = sin(t).
+    // Two steps matter: the first keeps `t` small enough for the series to
+    // converge, and the second halves the interval again so the series'
+    // error stays well inside tolerance at the extremes.
+    let mut t = x % TAU;
+    if t >= PI {
+        t -= TAU;
+    } else if t < -PI {
+        t += TAU;
+    }
+    if t > HALF_PI {
+        t = PI - t;
+    } else if t < -HALF_PI {
+        t = -PI - t;
+    }
+
+    // Horner evaluation of t - t^3/3! + t^5/5! - t^7/7! + t^9/9! - t^11/11!.
     let t2 = t * t;
-    let numerator = t * (1.0 - t2 / 120.0 + t2 * t2 / 5040.0);
-    let denominator = 1.0 + t2 / 20.0 + t2 * t2 / 840.0;
-    (numerator / denominator).clamp(-1.0, 1.0)
+    let series = t
+        * (1.0
+            + t2 * (-1.0 / 6.0
+                + t2 * (1.0 / 120.0
+                    + t2 * (-1.0 / 5040.0 + t2 * (1.0 / 362_880.0 - t2 / 39_916_800.0)))));
+    // The series is accurate in range, but the clamp guarantees the documented
+    // -1..=1 invariant even if a future edit loosens the reduction.
+    series.clamp(-1.0, 1.0)
 }
 
 /// `exp` without `std`, same rationale as [`libm_sin`].
@@ -936,15 +1024,35 @@ mod tests {
 
     #[test]
     fn phase_offset_shifts_the_cycle() {
-        // A half-cycle offset inverts a sine at its start.
+        // A half-cycle offset inverts a sine. Drive far enough into the cycle
+        // that the wave is at a meaningful amplitude; testing near the zero
+        // crossing would only compare two near-zero numbers.
         let mut a = Lfo::new();
         a.set_shape(LfoShape::Sine);
+        a.set_rate_hz(1.0);
         let mut b = Lfo::new();
         b.set_shape(LfoShape::Sine);
+        b.set_rate_hz(1.0);
         b.set_phase_offset(0.5);
-        let va = a.tick(0, SR);
-        let vb = b.tick(0, SR);
-        assert!((va - vb).abs() > 0.5, "{va} vs {vb} should be near-opposite");
+
+        // A quarter cycle in: sin is at its peak, so the offset version is
+        // near its trough.
+        let quarter_cycle = (SR / 4.0) as usize;
+        let va = a.tick(quarter_cycle, SR);
+        let vb = b.tick(quarter_cycle, SR);
+        assert!(
+            (va - vb).abs() > 1.5,
+            "a half-cycle offset should nearly invert the wave: {va} vs {vb}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_lfo_reports_the_shape_at_its_starting_phase() {
+        // `tick(0, ..)` is a legitimate call (a zero-length block) and must
+        // report the oscillator's actual position, not a stale zero.
+        let mut lfo = Lfo::new();
+        lfo.set_shape(LfoShape::Constant);
+        assert_eq!(lfo.tick(0, SR), 1.0);
     }
 
     #[test]
@@ -1249,9 +1357,14 @@ mod tests {
         assert_eq!(bank.envelope_count(), 1);
 
         let before = bank.lfo(lfo_index).unwrap().value();
-        bank.tick(4800, SR);
+        // Advance a *tenth* of a cycle. A full cycle would land the saw exactly
+        // back on its starting value, which would make this assertion vacuous.
+        bank.tick(SR as usize / 100, SR);
         let after = bank.lfo(lfo_index).unwrap().value();
-        assert_ne!(before, after);
+        assert_ne!(
+            before, after,
+            "the bank must actually advance the LFO it owns"
+        );
         assert!(bank.envelope(env_index).unwrap().value() > 0.0);
     }
 

@@ -22,9 +22,9 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use super::parameter::{
-    parameter_flags, ParameterAddress, ParameterDescriptor, ParameterKind, ParameterUnit,
-};
+use super::parameter::{ParameterAddress, ParameterDescriptor, ParameterKind};
+#[cfg(test)]
+use super::parameter::{parameter_flags, ParameterUnit};
 
 /// How many parameters the store reserves up front.
 ///
@@ -69,6 +69,16 @@ impl Default for ParameterStore {
 }
 
 impl ParameterStore {
+    /// Creates an empty store with the default pre-allocation.
+    ///
+    /// Prefer this over [`Self::with_capacity`] unless the project size is
+    /// known up front: the default covers the 64-channel target from PLAN
+    /// §3.S3, so a realistic project never grows the registry while audio runs.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Creates an empty store with room for `capacity` parameters.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
@@ -109,8 +119,12 @@ impl ParameterStore {
     ///
     /// Control thread only — allocates and re-sorts.
     pub fn register(&mut self, descriptor: &'static ParameterDescriptor) -> Option<usize> {
-        if !(descriptor.max_value >= descriptor.min_value) {
-            return None;
+        // An inverted or NaN bound would make every clamp meaningless, so the
+        // descriptor is refused rather than installed. `partial_cmp` makes the
+        // NaN case explicit instead of relying on a negated comparison.
+        match descriptor.max_value.partial_cmp(&descriptor.min_value) {
+            Some(core::cmp::Ordering::Less) | None => return None,
+            _ => {}
         }
         let key = descriptor.address.key();
         let default = descriptor.default_value.to_bits();
@@ -177,7 +191,6 @@ impl ParameterStore {
     /// All registered descriptors, in address order.
     ///
     /// Borrowed from the store — no allocation, no copy.
-    #[must_use]
     pub fn descriptors(&self) -> impl Iterator<Item = &'static ParameterDescriptor> + '_ {
         self.slots.iter().map(|s| s.descriptor)
     }

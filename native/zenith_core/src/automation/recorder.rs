@@ -251,11 +251,29 @@ impl Recorder {
             return RecordOutcome::NotArmed;
         }
 
-        // Decide whether this movement belongs to the current take, opens a
-        // new one, or ends the current one.
-        let take_open = self.take.as_ref().is_some_and(|t| t.open && t.address == address);
+        // Decide whether this movement continues the open take, replaces it,
+        // or starts the first one. Getting this wrong is subtle: opening a new
+        // take by assigning to `self.take` would silently *discard* the take
+        // that was already in flight, losing a pass the user just performed.
+        let existing = self.take.take();
+        let same_parameter = existing
+            .as_ref()
+            .is_some_and(|t| t.open && t.address == address);
 
-        if !take_open {
+        if !same_parameter {
+            // A take that belongs to a different parameter is finished before
+            // the new one starts, so only one take is ever open.
+            if let Some(previous) = existing {
+                if let Some(previous_lane) = lanes.get_mut(previous.address) {
+                    Self::commit(previous_lane, previous);
+                }
+            }
+        } else {
+            // Same parameter: the existing take stays open and is continued.
+            self.take = existing;
+        }
+
+        if self.take.is_none() {
             match mode {
                 RecordMode::Off => return RecordOutcome::NotArmed,
                 // Touch/Latch need a real touch to start a take; otherwise a
@@ -271,19 +289,6 @@ impl Recorder {
             }
             self.take = Some(Take::open(address, frame));
             self.latched_value = None;
-        }
-
-        // Close an existing take if it belongs to a different parameter, so
-        // only one take is ever open and points cannot interleave.
-        if let Some(take) = &self.take {
-            if take.address != address {
-                let previous = self.take.clone();
-                self.take = Some(Take::open(address, frame));
-                self.latched_value = None;
-                if let Some(previous) = previous {
-                    Self::commit(lane, previous);
-                }
-            }
         }
 
         let Some(take) = self.take.as_mut() else {
@@ -590,21 +595,31 @@ mod tests {
 
     #[test]
     fn out_of_order_points_are_rejected_rather_than_unsorted() {
-        // The clip's sorted invariant is load-bearing for the player's index.
+        // The clip's sorted invariant is load-bearing for the player's index:
+        // a jittery UI clock or a seek arriving mid-take must not be able to
+        // append a point that sorts before one already captured.
         let mut lanes = armed_lanes(&[VOLUME]);
         let mut recorder = recorder();
         recorder.set_max_interval_frames(1);
 
-        recorder.on_control_move(&mut lanes, VOLUME, 0.1, 10_000, true, RecordMode::Write);
-        recorder.on_control_move(&mut lanes, VOLUME, 0.9, 5_000, true, RecordMode::Write);
+        assert_eq!(
+            recorder.on_control_move(&mut lanes, VOLUME, 0.1, 10_000, true, RecordMode::Write),
+            RecordOutcome::Captured,
+            "the first point, at frame 10000, is fine"
+        );
+        assert_eq!(
+            recorder.on_control_move(&mut lanes, VOLUME, 0.9, 5_000, true, RecordMode::Write),
+            RecordOutcome::OutOfOrder,
+            "a point earlier than the last one must be refused, not inserted"
+        );
 
         let take = recorder.active_take().unwrap();
-        assert_eq!(take.len(), 2, "the first point should have been captured");
+        assert_eq!(take.len(), 1);
+        assert_eq!(take.points[0].frame, 10_000);
         assert!(
             take.points.windows(2).all(|w| w[0].frame <= w[1].frame),
             "take points must stay ordered"
         );
-        assert_eq!(take.points.last().unwrap().frame, 5_000);
     }
 
     #[test]

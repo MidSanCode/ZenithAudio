@@ -122,7 +122,7 @@ impl AutomationPoint {
 ///
 /// Points are kept sorted by `frame`, which is an invariant every mutating
 /// method restores before returning.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AutomationClip {
     points: Vec<AutomationPoint>,
     /// Frame of the first point, for the bucket index origin.
@@ -133,6 +133,22 @@ pub struct AutomationClip {
     buckets: [u32; INDEX_BUCKETS + 1],
     /// Whether the point set changed since the index was built.
     dirty: bool,
+}
+
+impl Default for AutomationClip {
+    /// An empty clip with a zeroed search index.
+    ///
+    /// Written by hand because `[u32; 65]` has no `Default` impl: arrays only
+    /// derive `Default` up to 32 elements.
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            index_origin: 0,
+            bucket_span: 0,
+            buckets: [0; INDEX_BUCKETS + 1],
+            dirty: false,
+        }
+    }
 }
 
 impl AutomationClip {
@@ -297,18 +313,25 @@ impl AutomationClip {
             return;
         }
         // Ceil-divided so the final bucket still covers `last`.
-        let bucket_span = span.div_ceil(INDEX_BUCKETS as i64).max(1);
+        // Written by hand rather than via `div_ceil`, which is still unstable
+        // for signed integers on this toolchain.
+        let bucket_span = ((span + INDEX_BUCKETS as i64 - 1) / INDEX_BUCKETS as i64).max(1);
         self.bucket_span = bucket_span;
-        for (i, point) in self.points.iter().enumerate() {
-            let bucket = ((point.frame - first) / bucket_span).min(INDEX_BUCKETS as i64 - 1);
-            // bucket+1 is the exclusive upper bound of bucket `bucket`.
-            for b in (bucket as usize + 1)..=INDEX_BUCKETS {
-                if self.buckets[b] == 0 {
-                    self.buckets[b] = i as u32;
-                } else {
-                    break;
-                }
+
+        // `buckets[b]` is the index of the first point that belongs to bucket
+        // `b` or later, and `buckets[INDEX_BUCKETS]` is `points.len()`.
+        //
+        // The monotonic "first index at or after" form is what makes the
+        // window computation below correct: for bucket `b` the bracketing pair
+        // for any frame inside it is guaranteed to lie in
+        // `buckets[b] - 1 ..= buckets[b + 1]`.
+        let mut next = 0usize;
+        for bucket in 0..INDEX_BUCKETS {
+            let bucket_start = first + (bucket as i64) * bucket_span;
+            while next < self.points.len() && self.points[next].frame < bucket_start {
+                next += 1;
             }
+            self.buckets[bucket] = next as u32;
         }
         self.buckets[INDEX_BUCKETS] = self.points.len() as u32;
     }
@@ -323,17 +346,21 @@ impl AutomationClip {
             return (0, self.points.len());
         }
         if frame < self.index_origin {
+            // Before the first bucket: the answer is the first point.
             return (0, 1);
         }
-        let bucket = ((frame - self.index_origin) / self.bucket_span) as usize;
-        if bucket >= INDEX_BUCKETS {
+        let bucket = (frame - self.index_origin) / self.bucket_span;
+        if bucket >= INDEX_BUCKETS as i64 {
+            // Past the last bucket: the answer is the last point.
             return (self.points.len().saturating_sub(1), self.points.len());
         }
-        let lo = self.buckets[bucket] as usize;
-        let hi = self.buckets[bucket + 1] as usize;
-        // Widen by one on each side: the bracketing pair may start in the
-        // previous bucket when a segment spans a boundary.
-        (lo.saturating_sub(1), (hi + 2).min(self.points.len()))
+        let bucket = bucket as usize;
+        // The pair bracketing `frame` cannot start before the last point of
+        // the previous bucket, and cannot extend past the last point of this
+        // one; hence the `-1` and the `+1`.
+        let lo = (self.buckets[bucket] as usize).saturating_sub(1);
+        let hi = (self.buckets[bucket + 1] as usize + 1).min(self.points.len());
+        (lo, hi)
     }
 
     /// Evaluates the curve at `frame`.
@@ -350,11 +377,23 @@ impl AutomationClip {
             return None;
         }
         let first = self.points[0];
-        if frame <= first.frame {
+        if frame < first.frame {
             return Some(first.value);
         }
         let last = self.points[self.points.len() - 1];
-        if frame >= last.frame {
+        if frame > last.frame {
+            return Some(last.value);
+        }
+
+        // At or below the first frame, and at or above the last, the answer is
+        // the *last* point sharing that frame — matching the coincidence rule
+        // in `interpolate`. Using `points[0]` here would disagree with the
+        // interior path for a clip that starts with duplicate frames.
+        if frame == first.frame {
+            let count = self.points.partition_point(|p| p.frame <= frame);
+            return Some(self.points[count - 1].value);
+        }
+        if frame == last.frame {
             return Some(last.value);
         }
 
@@ -431,17 +470,25 @@ pub fn shape_tension(t: f32, tension: f32, curve: CurveKind) -> f32 {
             if tension == 0.0 {
                 return t;
             }
-            // A rational bend rather than a power: it is defined at t == 0
-            // and t == 1 for every tension, so a segment can never lose its
-            // endpoints no matter how hard the handle is dragged.
-            let k = tension * 4.0;
-            let denom = 1.0 + k * (1.0 - 2.0 * t);
-            if denom.abs() < 1e-6 {
-                // Asymptote (only reachable at the extreme tension); fall
-                // back to the linear ramp instead of emitting an infinity.
-                return t;
-            }
-            (t / denom).clamp(0.0, 1.0)
+            // A power bend anchored at both endpoints:
+            //
+            //     s(t) = t^gamma,   gamma = 2^(-3 * tension)
+            //
+            // Why not a rational bend? A form like `t / (1 + k(1 - 2t))` looks
+            // appealing because it pins both endpoints, but its denominator
+            // crosses zero inside `0..1` for |k| above ~0.5, so a hard handle
+            // drag makes the curve fall off a cliff and the clamp that follows
+            // produces a discontinuous jump — a real overshoot bug in an audio
+            // parameter, not a cosmetic one.
+            //
+            // `t^gamma` has none of those problems: it is monotonic on `0..1`
+            // for every positive gamma, maps the endpoints to exactly 0 and 1,
+            // and moves the midpoint whenever gamma != 1. The sign convention
+            // is chosen so positive tension bends the curve *above* the
+            // diagonal, matching the display convention in an automation
+            // editor where dragging up raises the middle of a segment.
+            let gamma = exp_from_tension(-tension);
+            t.powf(gamma).clamp(0.0, 1.0)
         }
     }
 }
