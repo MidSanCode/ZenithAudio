@@ -14,8 +14,14 @@ zenith_core = { path = "native/zenith_core" }
 
 # Release profile tuned for a DSP core: the audio thread is latency-critical,
 # and LTO is what lets the inner sample loops inline across module boundaries.
+#
+# `panic = "abort"` is deliberately *not* set. Under `abort`, `catch_unwind`
+# never catches anything, so every `extern "C"` entry point would tear down the
+# whole host process instead of returning `ZENITH_ERR_PANICKED`. A panic in DSP
+# code during a recording take would lose the user's audio; ABI.md principle P4
+# requires the unwind strategy to stay intact. The cost is a slightly larger
+# binary, which is the right trade for a plugin-SDK-style native library.
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
