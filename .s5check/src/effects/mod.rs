@@ -1,4 +1,4 @@
-//! The unified effect interface (PLAN §3.S5).
+﻿//! The unified effect interface (PLAN 搂3.S5).
 //!
 //! Every built-in effect implements [`EffectProcessor`]. The trait is
 //! deliberately narrow: it knows about audio blocks, parameters and latency,
@@ -20,17 +20,11 @@
 //! An effect publishes a `'static` table of parameter descriptors. The same
 //! table drives three consumers: the audio path's parameter reads, the
 //! automation system (S2), and the UI, which generates a panel from the
-//! descriptors alone (PLAN §3.S5 — no hand-written Dart class per effect).
+//! descriptors alone (PLAN 搂3.S5 鈥?no hand-written Dart class per effect).
 
 pub mod buffer;
-pub mod delay;
-pub mod distortion;
 pub mod dynamics;
-pub mod eq;
-pub mod filter;
-pub mod modulation;
 pub mod registry;
-pub mod reverb;
 pub mod util;
 
 pub use buffer::{
@@ -357,3 +351,5 @@ mod tests {
         assert_eq!(sanitize_wet(f32::NAN), 1.0);
     }
 }
+
+

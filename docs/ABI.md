@@ -5,11 +5,11 @@
 > 属于 `docs/PLAN_DAW_PARITY.md` §4.2 第 1、2 条所称的「接口契约」，
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
 > **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 补 S0 实际落地状态；
-> v1.1 补 S2 参数与自动化落地状态
+> v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面
 >
-> **当前实现状态（S0、S2 已完成，2026-10-04 更新）**：
+> **当前实现状态（S0、S2、S3、S5 已完成，2026-10-05 更新）**：
 > `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
-> `lib/plugins/` **均已存在**并进入版本控制。
+> `lib/mixer/`、`lib/plugins/` **均已存在**并进入版本控制。
 >
 > - **S0**：版本三件套 `zenith_version()` / `zenith_version_match(u32)` /
 >   `zenith_version_string()`，端到端已验证 `flutter build windows --debug`
@@ -17,17 +17,24 @@
 > - **S2**：参数与自动化，`native/zenith_core/src/ffi/param_api.rs` 导出
 >   **52 个 `zenith_automation_*` 函数**（含 §6.4 列出的 6 个 `zenith_sizeof_*`、
 >   2 个平滑边界查询与 1 个 flag 掩码查询）。核心实现在
->   `native/zenith_core/src/automation/`（7 个模块，316 项测试）。
+>   `native/zenith_core/src/automation/`（7 个模块）。
+> - **S3**：混音器，`native/zenith_core/src/ffi/mixer_api.rs` 导出
+>   `zenith_mixer_*` 系列；核心实现在 `src/mixer/`。
+> - **S5**：内置效果器套件，`native/zenith_core/src/effects/`（注册表 +
+>   7 大类效果），`native/zenith_core/src/ffi/effect_api.rs` 导出
+>   `zenith_effect_*` 查询面与 `ZenithEffectDescriptor`。**§6.5b 为实际契约**；
+>   效果 DSP 本身不经 FFI 调用，只经查询面暴露给 Dart 生成 UI。
 >
 > `ABI_VERSION` 的 minor 计数是**所有 agent 共享的单一线性序列**，不是每阶段
-> 一个号：S2 占用 `0.2.0`（0x000200），S3 混音器随后占用 `0.3.0`（0x000300），
-> 故当前值为 **0.3.0**。每次提升均为 **minor**：仅**新增**导出函数与结构体，
-> 未改动任何既有签名、字段顺序或枚举判别值，符合 §2.2 的向后兼容规则。
-> 提案登记于 `docs/COORDINATION.md` C-002（S2）与 C-004（S3）。
+> 一个号：S2 占用 `0.2.0`（0x000200），S3 占用 `0.3.0`（0x000300），
+> S5 占用 `0.4.0`（0x000400），故当前值为 **0.4.0**。每次提升均为 **minor**：
+> 仅**新增**导出函数与结构体，未改动任何既有签名、字段顺序或枚举判别值，
+> 符合 §2.2 的向后兼容规则。提案登记于 `docs/COORDINATION.md`
+> C-002（S2）、C-004（S3）与 C-011（S5）。
 >
-> 因此：本文件中标注 **[S0 落地]** / **[S2 落地]** 的条目是**已实现事实**；
-> 其余（`[S1]`/`[S3]`/`[S4]`/`[S5]`/`[S6]`）仍是目标契约。DSP 图、sequencer、
-> mixer、effects 的 ABI 待后续阶段落地，落地时必须同步更新本文件。
+> 因此：本文件中标注 **[S0 落地]** / **[S2 落地]** / **[S5 落地]** 的条目是
+> **已实现事实**；其余（`[S1]`/`[S4]`/`[S6]`/`[S7]`）仍是目标契约。DSP 图、
+> sequencer、离线渲染与插件宿主的 ABI 待后续阶段落地，落地时必须同步更新本文件。
 >
 > ⚠️ **本文件描述的是我们自己的 ABI。禁止在本仓库引入任何第三方 DAW 品牌名（§0.2）。**
 
@@ -540,10 +547,17 @@ float  zenith_smoothing_ms_max(void);
 uint32_t zenith_param_flag_mask(void);   /* 本版本认识的 flag 位掩码 */
 ```
 
-> **`zenith_effect_describe_params` 未在 S2 落地**：它依赖 S5 的效果槽模型。
-> S2 用 `zenith_automation_list_parameters`（按 owner 过滤）覆盖了同一需求，
-> S5 落地时在其之上加一层按效果槽过滤的封装即可。这是 S5 的第一个任务，
-> 见 `docs/stages/s2-report.md`「交给 S5 的接口」。
+> **`zenith_effect_describe_params` 的欠账已由 S5 偿还（v1.2）**：它依赖 S5 的
+> 效果槽模型。S5 没有另起一个「按槽过滤」的封装，而是把它拆成两条更精确的路径：
+>
+> * **静态侧**（不需要引擎实例）：`zenith_effect_parameter_count(kind)` 给出某效果的
+>   参数个数；
+> * **实例侧**（需要一个活的效果实例）：`zenith_effect_instance_describe_parameter`
+>   逐个写出描述符。
+>
+> 这样拆分的理由是：参数描述符**内含自动化地址**，而地址取决于该实例落在哪个槽，
+> 因此描述符本质上属于实例而非类型（见 `EffectProcessor::parameters` 的文档）。
+> 详见下面的 **§6.5b**。
 
 
 ### 6.5 DSP 图与效果槽（**[S3]/[S5]**）
@@ -567,6 +581,89 @@ ZenithStatusCode zenith_route_disconnect(ZenithEngine*, uint32_t src_channel,
 ZenithStatusCode zenith_effect_latency(const ZenithEngine*, uint32_t channel_index,
                                        uint32_t slot, uint32_t* out_samples);
 ```
+
+### 6.5b 内置效果器查询面（**[S5 落地]**，v1.2）
+
+**本节的函数不需要句柄。** 内置效果注册表是编译期常量，不依赖引擎、采样率或任何实例；
+让调用方先建句柄会暗示一个并不存在的状态。唯一与实例相关的是
+`zenith_effect_latency_samples`，它因此显式接收采样率与块大小。
+
+```c
+/* 两段式枚举：先问数量，再按下标取 kind */
+uint32_t zenith_effect_count(void);
+ZenithStatusCode zenith_effect_kind_at(uint32_t index, uint32_t* out_kind);
+
+/* 描述符查询：一个按 kind，一个按下标 */
+ZenithStatusCode zenith_effect_describe(uint32_t kind, ZenithEffectDescriptor* out);
+ZenithStatusCode zenith_effect_describe_at(uint32_t index, ZenithEffectDescriptor* out);
+
+/* 名称与分类。返回的指针是 'static，Dart 只读、绝不 free（§3.3） */
+const char* zenith_effect_name(uint32_t kind);   /* 未知 kind 返回 NULL */
+const char* zenith_effect_key(uint32_t kind);    /* 未知 kind 返回 NULL */
+uint32_t    zenith_effect_category(uint32_t kind);
+uint32_t    zenith_effect_oversampling(uint32_t kind);
+
+/* kind 命名空间判定。与 is_known 的区别见下方「两个问题的区别」 */
+uint32_t zenith_effect_is_known(uint32_t kind);
+uint32_t zenith_effect_is_builtin_kind(uint32_t kind);
+
+/* 参数：静态侧问个数，实例侧取描述符 */
+uint32_t zenith_effect_parameter_count(uint32_t kind);
+uint32_t zenith_effect_instance_parameter_count(const ZenithEffectProcessor* p);
+ZenithStatusCode zenith_effect_instance_describe_parameter(
+    const ZenithEffectProcessor* processor, uint32_t ordinal,
+    ZenithParamDescriptor* out_descriptor);
+
+/* PDC 延迟查询（PLAN §3.S4 第 1 条）。为控制线程调用，非实时安全 */
+ZenithStatusCode zenith_effect_latency_samples(uint32_t kind, uint32_t sample_rate,
+                                               uint32_t max_block, uint32_t channels,
+                                               uint32_t* out_samples);
+
+/* 常量镜像，避免 Dart 硬编码 */
+size_t   zenith_sizeof_effect_descriptor_checked(void);
+uint32_t zenith_effect_plugin_kind_base(void);
+uint32_t zenith_effect_category_analysis(void);
+```
+
+#### `ZenithEffectDescriptor`（`#[repr(C)]`，`zenith_sizeof_effect_descriptor()`）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `kind` | `u32` | 效果 kind，与效果槽中存放的值一致 |
+| `category` | `u32` | 分类，见 `zenith_effect_category` |
+| `param_count` | `u32` | 参数个数；序号为 `first_param .. first_param + param_count` |
+| `first_param` | `u32` | 序号下界。内置效果一律为 `0` |
+| `has_latency` | `u32` | 是否为延迟效果（UI 徽标的**提示**；权威值见延迟查询） |
+| `is_analysis_only` | `u32` | 是否为只分析不改音频的效果（如频谱） |
+| `key_utf8` | `const char*` | 机器可读稳定键，永不本地化，可作持久化键 |
+| `label_utf8` | `const char*` | 人类可读标签 |
+
+字段按**对齐从大到小**排列以消除隐式填充（§3.4）。含指针，故 64 位下 40 字节、
+`wasm32` 下 32 字节——Dart 侧取 `sizeOf` 运行时值而非硬编码。
+
+#### 两个问题的区别
+
+| 函数 | 回答的问题 | 用例 |
+|---|---|---|
+| `zenith_effect_is_known` | 「**这个 build 能实例化**它吗？」 | 存槽前校验。混合器对未知 kind 静默旁路，不校验的话，引用更新版本效果器的工程会静默得到空槽 |
+| `zenith_effect_is_builtin_kind` | 「它**属于哪个命名空间**？」 | 加载器据此决定是否需要去找插件（§11 Q2） |
+
+#### `zenith_effect_instance_describe_parameter` 用的是**同一个** `ZenithParamDescriptor`
+
+Dart 因此只需要一个参数描述符解码器，无论该参数属于通道还是属于效果器。
+这直接兑现 PLAN §3.S5 的「UI 自动生成」：新增一个内置效果时，
+**Dart 侧零改动**——UI 面板由描述符生成。
+
+#### 失败语义
+
+* 未知 `kind` → `ZENITH_ERR_NOT_FOUND`，**不**替换为默认效果。替换会让调用方
+  无从察觉地以为加载了 A，实际是 B，保存工程时即污染用户数据。
+* 越界 `index` / `ordinal` → `ZENITH_ERR_OUT_OF_RANGE`，**不**钳制到末项。
+* 空出参指针 → `ZENITH_ERR_NULL_POINTER`。
+* 任何失败都**不修改**出参（§4.1）。
+* `zenith_effect_name` / `zenith_effect_key` 对未知 kind 返回 `NULL`
+  ——这是本模块内**唯一**以空指针表达失败的地方，因为它们无法返回状态码。
+  「一空指针」与「空字符串」不可混同：前者是「无此效果」，后者是畸形条目。
 
 ### 6.6 MIDI / 事件注入（**[S6]**）
 
@@ -769,6 +866,7 @@ cargo test
 | v1.0 | — | 首次冻结：确立 10 条设计原则、版本策略、类型映射、错误码、所有权模型、函数面清单、线程模型、构建产物、同步验证机制 | S0 契约基线 |
 | v1.0.1 | — | 补充 S0 实际落地状态（仅版本三件套已实现） | S0 |
 | v1.1 | 2026-10-04 | S2 参数与自动化落地：新增 52 个 `zenith_automation_*` 函数与独立句柄 `ZenithAutomation`（占用 minor `0.2.0`）；§6.4 重写为实际契约；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警。**注**：minor 计数为全 agent 共享的单一线程序列，S3 随后占用 `0.3.0`，故 `ABI_VERSION` 当前为后者 | Agent-C（S2） |
+| v1.2 | 2026-10-05 | S5 内置效果器查询面落地：新增 §6.5b 与 `zenith_effect_*` 系列共 15 个导出函数、`ZenithEffectDescriptor` 结构体、`zenith_effect_category` / `zenith_effect_kind_range` 常量镜像（占用 minor `0.4.0`，`ABI_VERSION` 当前为 `0.4.0`）；**偿还 §6.4 记录的 `zenith_effect_describe_params` 欠账**（拆为「静态侧问个数 + 实例侧取描述符」两条路径，理由是描述符内含取决于槽位的自动化地址）；§3.1 补 `ParameterUnit::Milliseconds`（纯追加判别值 7）；更正顶部过时的「S5 未落地」状态说明。**不涉及**任何效果 DSP 的跨语言调用——效果只经查询面暴露，UI 由描述符生成 | Agent-C（S5） |
 
 ---
 

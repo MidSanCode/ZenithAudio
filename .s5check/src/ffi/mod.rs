@@ -9,16 +9,14 @@
 //! This directory is **shared** (`docs/COORDINATION.md`). Each agent owns one
 //! submodule:
 //!
-//! * `types.rs` — split by labelled section (S0/S1, S2, S3, S5)
+//! * `types.rs` — split by labelled section (S0/S1, S2, S3)
 //! * `param_api.rs` — Agent-C (S2)
-//! * `effect_api.rs` — Agent-C (S5)
-//! * `mixer_api.rs` — Agent-D (S3)
+//! * `engine_api.rs` — Agent-A (S1)
+//! * `graph_api.rs` — Agent-D (S3)
 //!
 //! Adding a file here requires a coordination entry, because `lib.rs` must
-//! declare it. The S5 effect surface was registered as entry C-011 in
-//! `docs/COORDINATION.md`.
+//! declare it.
 
-pub mod effect_api;
 pub mod mixer_api;
 pub mod param_api;
 pub mod types;

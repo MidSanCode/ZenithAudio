@@ -57,24 +57,18 @@ pub mod mixer;
 /// so a stale `zenith_core.dll` fails loudly at startup instead of producing
 /// silent audio corruption.
 ///
-/// # Why this is 0.4.0 and not 0.1.x
+/// # Why this is 0.2.0 and not 0.1.x
 ///
-/// Each stage that published new symbols bumped the minor, on the same
-/// additive basis (`docs/ABI.md` §2.2): *adding* exported functions and
-/// *appending* struct fields is backward compatible, and no existing signature,
-/// field order or enum discriminant has been altered by any of them.
+/// S2 added the parameter and automation surface (`ffi/param_api.rs`, 40+
+/// exported functions, plus the S2 structs in `ffi/types.rs`). Per
+/// `docs/ABI.md` §2.2, *adding* exported functions and *appending* struct
+/// fields is a backward-compatible change that bumps the minor version; no
+/// existing signature, field order or enum discriminant was altered.
+/// Registered as entry C-002 in `docs/COORDINATION.md`.
 ///
-/// * `0.2.0` — S2: the parameter and automation surface (`ffi/param_api.rs`,
-///   52 exported functions, plus the S2 structs in `ffi/types.rs`).
-///   Registered as C-002.
-/// * `0.3.0` — S3: the mixer surface (`ffi/mixer_api.rs`, the S3 structs).
-///   Registered as C-010.
-/// * `0.4.0` — S5: the built-in effect suite's query surface
-///   (`ffi/effect_api.rs`, the `ZenithEffectDescriptor` struct).
-///   Registered as C-011. This is what lets Dart generate an effect panel from
-///   descriptors instead of hand-writing a class per effect (PLAN §3.S5), and
-///   it pays the `zenith_effect_describe_params` debt recorded in §6.4.
-pub const ABI_VERSION: u32 = encode_version(0, 4, 0);
+/// `0.3.0` adds the S3 mixer surface (`ffi/mixer_api.rs`, the S3 structs in
+/// `ffi/types.rs`) on the same additive basis — registered as C-010.
+pub const ABI_VERSION: u32 = encode_version(0, 3, 0);
 
 /// Status code returned by every fallible entry point.
 ///

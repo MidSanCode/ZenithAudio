@@ -52,6 +52,14 @@ abstract final class ZenithParamUnit {
   /// Beats, for tempo-synced values.
   static const int beats = 6;
 
+  /// Milliseconds.
+  ///
+  /// Added by S5 (discriminant 7, purely additive). Effects express times as
+  /// milliseconds so a 10 ms attack renders as "10" rather than "0.01"; before
+  /// this unit existed an effect would have had to publish seconds and let the
+  /// UI guess the scale.
+  static const int milliseconds = 7;
+
   /// A short display suffix for a unit, or an empty string when unitless.
   ///
   /// An unknown unit yields `''` rather than a placeholder: showing a wrong
@@ -68,6 +76,8 @@ abstract final class ZenithParamUnit {
         return ' %';
       case beats:
         return ' beats';
+      case milliseconds:
+        return ' ms';
       default:
         return '';
     }
@@ -128,6 +138,115 @@ final class ZenithParamDescriptor extends Struct {
 
   /// Human-readable label. Borrowed from Rust; read only, never freed.
   external Pointer<Utf8> labelUtf8;
+}
+
+/// The `ZenithEffectDescriptor` struct, mirroring `ffi/types.rs` (S5).
+///
+/// 40 bytes on a 64-bit target (32 on 32-bit), because of the two pointers.
+/// Dart takes the size from the core at runtime via
+/// `zenith_sizeof_effect_descriptor_checked` rather than hard-coding either.
+///
+/// This is what makes the effect UI auto-generating: adding an effect to the
+/// Rust registry makes it appear in Dart with no Dart change at all.
+final class ZenithEffectDescriptor extends Struct {
+  /// Effect kind id, matching the value a mixer effect slot stores.
+  @Uint32()
+  external int kind;
+
+  /// Family; see [ZenithEffectCategory].
+  @Uint32()
+  external int category;
+
+  /// How many parameters the effect publishes.
+  @Uint32()
+  external int paramCount;
+
+  /// Lower bound of this effect's parameter ordinals. `0` for the built-ins.
+  @Uint32()
+  external int firstParam;
+
+  /// Non-zero when the effect introduces latency PDC must compensate.
+  ///
+  /// A UI hint only — the authoritative figure comes from
+  /// `zenith_effect_latency_samples`, which depends on the sample rate and the
+  /// effect's current settings.
+  @Uint32()
+  external int hasLatency;
+
+  /// Non-zero when the effect analyses audio and passes it through unchanged.
+  @Uint32()
+  external int isAnalysisOnly;
+
+  /// Stable machine-readable key, e.g. `"compressor"`. Never localized, so it
+  /// is safe as a persistence key. Borrowed from Rust; never freed here.
+  external Pointer<Utf8> keyUtf8;
+
+  /// Human-readable label. Borrowed from Rust; never freed here.
+  external Pointer<Utf8> labelUtf8;
+}
+
+/// Effect category discriminants, mirroring `zenith_effect_category`.
+///
+/// Held as raw ints rather than an enum because a newer core may send a
+/// category this build has never seen; the UI groups by category but must
+/// still render an unfamiliar one as a plain entry rather than throw.
+abstract final class ZenithEffectCategory {
+  /// Filters and equalisers.
+  static const int equalizer = 0;
+
+  /// Compressors, limiters and gates.
+  static const int dynamics = 1;
+
+  /// Reverberation.
+  static const int reverb = 2;
+
+  /// Delays and echoes.
+  static const int delay = 3;
+
+  /// Chorus, flanger and phaser.
+  static const int modulation = 4;
+
+  /// Saturation and bit reduction.
+  static const int distortion = 5;
+
+  /// Signal-shaping filters.
+  static const int filter = 6;
+
+  /// Analysis that produces no audio.
+  static const int analysis = 7;
+
+  /// Utility processors, and the fallback for an unknown category.
+  static const int utility = 8;
+
+  /// A display name for a category, or `'Effect'` when unknown.
+  static String nameFor(int category) {
+    switch (category) {
+      case equalizer:
+        return 'EQ';
+      case dynamics:
+        return 'Dynamics';
+      case reverb:
+        return 'Reverb';
+      case delay:
+        return 'Delay';
+      case modulation:
+        return 'Modulation';
+      case distortion:
+        return 'Distortion';
+      case filter:
+        return 'Filter';
+      case analysis:
+        return 'Analysis';
+      case utility:
+        return 'Utility';
+      default:
+        return 'Effect';
+    }
+  }
+
+  /// Sort order for grouping in a picker. Unknown categories sort last.
+  static int orderFor(int category) =>
+      category >= equalizer && category <= utility ? category : utility + 1;
 }
 
 /// The `ZenithAutomationPoint` struct, mirroring `ffi/types.rs`.
