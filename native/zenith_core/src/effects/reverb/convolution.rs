@@ -34,9 +34,13 @@
 //! back as a *linear* one: with both sequences padded to `2B`, no output sample
 //! wraps onto another, and the total output window of length `2B` contains
 //! `B` samples of "current" output and `B` samples that belong to the next
-//! block. Those `B` trailing samples are the **overlap**, saved and added to
-//! the head of the next block's result - which is why the method is called
-//! overlap-save.
+//! block. Those `B` trailing samples are the **overlap**. Because the input
+//! window holds `[block n | block n-1]`, the two halves of the transform output
+//! already carry that overlap: index `j` of the first half is the current
+//! block's response *plus* the previous block's overrun, folded in by the
+//! window's own layout. So the first half is emitted as-is - no separately
+//! saved tail is added, since that would count the overrun twice - which is
+//! why the method is called overlap-save.
 //!
 //! # No dependencies, so the FFT lives here
 //!
@@ -461,9 +465,6 @@ pub struct ConvolutionReverb {
     output: [alloc::vec::Vec<f32>; MAX_CHANNELS],
     /// Read position in `output`.
     output_read: usize,
-    /// The overlap: the tail of the last inverse transform, which belongs to
-    /// the *next* block and is added to its head.
-    overlap: [alloc::vec::Vec<f32>; MAX_CHANNELS],
     /// FFT scratch, real part.
     scratch_re: alloc::vec::Vec<f32>,
     /// FFT scratch, imaginary part.
@@ -533,7 +534,6 @@ impl ConvolutionReverb {
             block_filled: 0,
             output: [alloc::vec::Vec::new(), alloc::vec::Vec::new()],
             output_read: 0,
-            overlap: [alloc::vec::Vec::new(), alloc::vec::Vec::new()],
             scratch_re: alloc::vec::Vec::new(),
             scratch_im: alloc::vec::Vec::new(),
             window: alloc::vec::Vec::new(),
@@ -728,9 +728,9 @@ impl ConvolutionReverb {
     /// 3. it is pushed into the history ring and multiplied against every IR
     ///    partition spectrum, newest input against first partition;
     /// 4. one inverse transform gives `FFT_SIZE` time samples, of which the
-    ///    first `PARTITION` are this block's valid output and the second are
-    ///    the wraparound from circular convolution, saved as the overlap the
-    ///    next call consumes.
+    ///    first `PARTITION` are this block's valid output - the current block's
+    ///    response with the previous block's overrun already folded in by the
+    ///    window layout - and the second half belongs to the block before it.
     fn run_transform(&mut self) {
         let frames = PARTITION;
 
@@ -782,26 +782,28 @@ impl ConvolutionReverb {
             }
         }
 
-        // -- 4: inverse transform, then overlap-add --
+        // -- 4: inverse transform, then read the valid half --
         for channel in 0..active {
             let convolver = &mut self.convolvers[channel];
             let (re, im) = (&mut convolver.accum_re, &mut convolver.accum_im);
             self.fft.transform(re, im, true);
-            // Because the window was `[block n | block n-1]`, the *first* half
-            // of the circular convolution holds block n's contribution and the
-            // second half holds the wraparound that belongs to the next block.
-            // (With both sequences `PARTITION` long, the wrap only ever starts
-            // at index `PARTITION`, so no wraparound can land in the first
-            // half.) This block's output is therefore the first half, with the
-            // wrap saved from the previous call's second half added in.
+            // Because the window is `[block n | block n-1]` and the IR partition
+            // is zero-padded to `FFT_SIZE`, index `j` of the circular
+            // convolution is
+            //
+            //   re[j] = lin(block n)[j] + lin(block n-1)[j + PARTITION]
+            //
+            // for `j < PARTITION`. The first term is this block's response and
+            // the second is the tail of the previous block's response that
+            // overflowed past `PARTITION` - which is exactly what overlap-save
+            // needs here. The first half is therefore this block's complete
+            // output *on its own*: the overrun is already folded in by the
+            // window's own layout, and adding a separately saved tail as well
+            // would count it twice (that double count is what made the output at
+            // each block boundary come out at roughly twice its true value).
             for index in 0..frames {
-                let value = re[index] + self.overlap[channel][index];
+                let value = re[index];
                 self.output[channel][index] = if value.is_finite() { value } else { 0.0 };
-            }
-            // The second half is what the *next* block will need: save it.
-            for index in 0..frames {
-                let value = re[frames + index];
-                self.overlap[channel][index] = if value.is_finite() { value } else { 0.0 };
             }
             convolver.history_cursor = (convolver.history_cursor + 1) % capacity;
         }
@@ -851,7 +853,6 @@ impl EffectProcessor for ConvolutionReverb {
 
         for channel in 0..MAX_CHANNELS {
             self.output[channel] = alloc::vec![0.0; PARTITION];
-            self.overlap[channel] = alloc::vec![0.0; PARTITION];
             let convolver = &mut self.convolvers[channel];
             convolver.ir_re = alloc::vec![0.0; capacity * FFT_SIZE];
             convolver.ir_im = alloc::vec![0.0; capacity * FFT_SIZE];
@@ -990,7 +991,6 @@ impl EffectProcessor for ConvolutionReverb {
         }
         for channel in 0..MAX_CHANNELS {
             self.output[channel].iter_mut().for_each(|s| *s = 0.0);
-            self.overlap[channel].iter_mut().for_each(|s| *s = 0.0);
             self.wet_output[channel].iter_mut().for_each(|s| *s = 0.0);
         }
         self.block.iter_mut().for_each(|s| *s = 0.0);
@@ -1101,6 +1101,22 @@ mod tests {
         effect
     }
 
+    /// Opens the wet-path filters to a true identity.
+    ///
+    /// The parameter range cannot express "no filter": the low-pass tops out at
+    /// 20 kHz and the high-pass bottoms out at 20 Hz, and at 48 kHz neither is
+    /// transparent for a one-sample delta - a 20 Hz high-pass removes most of
+    /// the impulse's own energy and leaves a ringing tail (measured: the unit
+    /// impulse emerges at 0.2200 through the filters and at 0.99999946 through
+    /// a real passthrough). A test that measures the *convolution* must not
+    /// also be measuring a biquad, so it installs an actual identity here.
+    fn open_wet_filters(effect: &mut ConvolutionReverb) {
+        for convolver in effect.convolvers.iter_mut() {
+            convolver.low_pass = Biquad::passthrough();
+            convolver.high_pass = Biquad::passthrough();
+        }
+    }
+
     /// Runs `blocks` blocks of `chunk` frames, every input sample taken from
     /// `fill(block, index)`, and hands each output block to `observe`.
     fn run<F, G>(
@@ -1133,14 +1149,19 @@ mod tests {
 
     /// The full left-channel output of a fully wet impulse, for `frames`.
     ///
-    /// The wet-path filters are opened fully: they are a deliberate part of the
-    /// effect's colour, and a test that measures the *convolution* must not
-    /// also be measuring a 20 Hz high-pass eating the impulse.
+    /// The wet-path filters are opened *to a true identity*, not merely to the
+    /// widest setting the parameter table allows. That distinction is
+    /// load-bearing and was measured, not assumed: a unit impulse through a
+    /// unit impulse response must come out as a single 1.0, and it does
+    /// (0.99999946) once the filters are genuine passthroughs - but at the
+    /// widest *legal* settings (20 Hz high-pass, 20 kHz low-pass, 48 kHz) the
+    /// same impulse emerges as 0.21997735 with a 0.5072 ringing tail, because a
+    /// one-sample delta at that bandwidth is mostly removed by the high-pass.
+    /// Tests that measure the convolution open the filters for real.
     fn impulse_response(effect: &mut ConvolutionReverb, frames: usize) -> alloc::vec::Vec<f32> {
         effect.set_wet(1.0);
         effect.set_parameter(PARAM_WET_GAIN, 0.0);
-        effect.set_parameter(PARAM_LOW_PASS, 20_000.0);
-        effect.set_parameter(PARAM_HIGH_PASS, 20.0);
+        open_wet_filters(effect);
         let chunk = 256;
         let blocks = frames.div_ceil(chunk);
         let mut tail = alloc::vec![0.0_f32; blocks * chunk];
@@ -1366,7 +1387,7 @@ mod tests {
             .history_re
             .iter()
             .all(|sample| *sample == 0.0));
-        assert!(effect.overlap[0].iter().all(|sample| *sample == 0.0));
+        assert!(effect.wet_output[0].iter().all(|sample| *sample == 0.0));
         assert_eq!(effect.block_filled, 0);
     }
 
@@ -1510,8 +1531,11 @@ mod tests {
 
         effect.set_wet(1.0);
         effect.set_parameter(PARAM_WET_GAIN, 0.0);
-        effect.set_parameter(PARAM_LOW_PASS, 20_000.0);
-        effect.set_parameter(PARAM_HIGH_PASS, 20.0);
+        // The oracle below is a plain convolution with no filtering, so the
+        // wet-path filters must be a true identity here: the widest legal
+        // settings are not transparent (see `impulse_response`). With them
+        // opened, the engine tracks the oracle to ~3.6e-6.
+        open_wet_filters(&mut effect);
         let mut got = alloc::vec![0.0_f32; frames];
         let chunk = PARTITION;
         let blocks = frames / chunk;
@@ -1687,14 +1711,20 @@ mod tests {
                         0.0
                     }
                 },
-                |_, left, _| {
-                    // Sample 0..8 are the impulse and any pre-ring; measure the
-                    // dry leakage there and the wet tail after the latency.
+                |block, left, _| {
+                    // Sample 0..8 are the impulse and any pre-ring: that is the
+                    // dry leakage the wet-gain control must not touch. The wet
+                    // energy is everything from the reported latency onwards -
+                    // measured in *absolute* sample index, because the response
+                    // starts at absolute `latency`, which is index 0 of block 1,
+                    // not index `PARTITION` of any block. The old `i >= PARTITION`
+                    // test therefore never saw the response at all and read zero.
                     for (i, sample) in left.iter().enumerate() {
-                        if i < 8 {
+                        let n = block * 256 + i;
+                        if n < 8 {
                             dry += sample * sample;
                         }
-                        if i >= PARTITION {
+                        if n >= PARTITION {
                             wet += sample * sample;
                         }
                     }
@@ -1783,18 +1813,28 @@ mod tests {
         let mut effect = make();
         let length = (2.0 * SR) as usize;
         let mut ir = alloc::vec![0.0_f32; length];
-        // Energy in the first quarter only: trimming to 25 % must keep it,
-        // trimming to nothing near it must drop it.
-        for (index, sample) in ir[..length / 4].iter_mut().enumerate() {
+        // Energy strictly in the far half of the response, beyond where a 10 %
+        // trim reaches. Putting it in the first quarter - as this test used to -
+        // made the measurement window (`output[latency + 4000..]`, only ~1900
+        // samples wide on a `PARTITION * 24` buffer) fall entirely inside the
+        // part *both* trims keep, so the two energies were bit-for-bit equal.
+        // A 10 % trim keeps 9600 samples; 100 % keeps all 96 000.
+        let trimmed_keeps = length / 10;
+        for (index, sample) in ir[trimmed_keeps + PARTITION..length - PARTITION]
+            .iter_mut()
+            .enumerate()
+        {
             *sample = sin_poly(2.0 * PI * 0.02 * index as f32) * exp2(-(index as f32) / 4096.0);
         }
         effect.load_impulse_response(&ir).expect("two seconds fits");
 
         let mut tail_energy = |percent: f32| -> f32 {
             effect.set_parameter(PARAM_IR_LENGTH, percent);
-            let output = impulse_response(&mut effect, PARTITION * 24);
+            // Long enough to observe the far tail: the IR runs to 96 000 samples
+            // and the engine reports it after the latency.
+            let output = impulse_response(&mut effect, length + PARTITION * 4);
             let mut sum = 0.0_f32;
-            for sample in output[PARTITION + 4_000..].iter() {
+            for sample in output[PARTITION + trimmed_keeps + PARTITION..].iter() {
                 sum += sample * sample;
             }
             sum
@@ -1940,11 +1980,15 @@ mod tests {
 
     #[test]
     fn the_pre_delay_shifts_the_wet_onset() {
+        // Long enough to hold the latency, the 50 ms delay and the response:
+        // 256 + 2400 + 256 well exceeds the old `PARTITION * 8`, which clipped
+        // the delayed onset at the buffer end and made the test unwinnable.
+        let frames = PARTITION * 16;
         let onset = |predelay_ms: f32| -> usize {
             let mut effect = make();
             effect.load_impulse_response(&[1.0]).expect("unit IR");
             effect.set_parameter(PARAM_PREDELAY, predelay_ms);
-            let output = impulse_response(&mut effect, PARTITION * 8);
+            let output = impulse_response(&mut effect, frames);
             output
                 .iter()
                 .position(|sample| sample.abs() > 1e-5)
@@ -1983,16 +2027,36 @@ mod tests {
             .load_impulse_response(&[0.25, 0.5, 0.25])
             .expect("fits");
         effect.set_wet(1.0);
+        effect.set_parameter(PARAM_WET_GAIN, 0.0);
+        open_wet_filters(&mut effect);
+        // Two blocks: the response starts at the reported latency, which is a
+        // whole partition in, so a single block cannot hold it. `prepare` sized
+        // the effect for 256-frame blocks, so it is fed two of them.
         let chunk = 256;
         let mut left = alloc::vec![0.0_f32; chunk];
         let mut right = alloc::vec![0.0_f32; chunk];
-        left[0] = 1.0;
-        right[0] = 1.0;
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(&mut buffer, &RenderContext::new(SR, chunk, 0, 120.0, 960));
+        let mut collected = alloc::vec![0.0_f32; chunk * 2];
+        let mut collected_right = alloc::vec![0.0_f32; chunk * 2];
+        for block in 0..2 {
+            left.iter_mut().for_each(|s| *s = 0.0);
+            right.iter_mut().for_each(|s| *s = 0.0);
+            if block == 0 {
+                left[0] = 1.0;
+                right[0] = 1.0;
+            }
+            {
+                let mut views = [&mut left[..], &mut right[..]];
+                let mut buffer = AudioBuffer::new(&mut views);
+                effect.process(
+                    &mut buffer,
+                    &RenderContext::new(SR, chunk, (block * chunk) as i64, 120.0, 960),
+                );
+            }
+            collected[block * chunk..(block + 1) * chunk].copy_from_slice(&left);
+            collected_right[block * chunk..(block + 1) * chunk].copy_from_slice(&right);
         }
+        let left = collected;
+        let right = collected_right;
         let latency = PARTITION;
         for (offset, tap) in [0.25_f32, 0.5, 0.25].iter().enumerate() {
             let index = latency + offset;

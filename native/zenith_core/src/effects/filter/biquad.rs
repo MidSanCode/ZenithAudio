@@ -164,7 +164,13 @@ impl Biquad {
         // Bilinear transform pre-warp: the analog prototype's frequency axis is
         // compressed by `tan(PI*f/fs)`, so a digital corner lands exactly where
         // the user asked rather than drifting sharp as it approaches Nyquist.
-        let omega = PI * freq / sample_rate.max(1.0);
+        //
+        // `omega` is the *angular* frequency, so the factor of two matters:
+        // `2*PI*f/fs`, not `PI*f/fs`. Dropping it computes `sin` and `cos` at
+        // half the true angle, which moves a low-pass corner down an octave and
+        // detunes a notch - the filter still *looks* like a filter, which is
+        // why this has to be pinned by a measurement rather than by inspection.
+        let omega = 2.0 * PI * freq / sample_rate.max(1.0);
         let sn = sin_poly(omega);
         let cs = cos_poly(omega);
         // `tan` is only needed by designs whose prototype wants `w0/2`; use the

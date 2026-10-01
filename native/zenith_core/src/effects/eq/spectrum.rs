@@ -33,6 +33,27 @@ pub const FFT_SIZE: usize = 1024;
 /// Number of usable bins: `FFT_SIZE / 2 + 1`.
 pub const BIN_COUNT: usize = FFT_SIZE / 2 + 1;
 
+/// The published floor for a bin, in decibels.
+///
+/// A magnitude at or below this is silence as far as the display is concerned.
+pub const FLOOR_DB: f32 = -144.0;
+
+/// The "no previous frame" sentinel used by the smoothing one-pole.
+///
+/// Deliberately *below* [`FLOOR_DB`], and not equal to any value the analyser
+/// can publish, so "seeded yet" and "genuinely at the floor" stay
+/// distinguishable. Conflating them makes the first frames fade in from the
+/// floor instead of seeding on the first measurement, which shows up as two
+/// identical inputs producing visibly different frames.
+pub const UNSET_DB: f32 = -200.0;
+
+/// Highest accepted smoothing, in percent.
+///
+/// Capped below 100 so the smoother always retains some response to the current
+/// frame; a coefficient of exactly 1.0 would freeze the display at whatever it
+/// first saw, which reads as a hung analyser rather than a smooth one.
+pub const MAX_SMOOTHING_PERCENT: f32 = 95.0;
+
 /// Parameter ordinals.
 pub const PARAM_ENABLED: u16 = 0;
 /// Smoothing applied to the displayed magnitudes, in percent.
@@ -279,23 +300,44 @@ impl SpectrumAnalyser {
         self.transform();
 
         // Normalise so a full-scale sine reads as 0 dB.
-        let norm = 2.0 / FFT_SIZE as f32;
-        let alpha = self.smoothing.clamp(0.0, 0.95);
+        //
+        // A real sine of amplitude `A` on an exact bin produces a peak
+        // magnitude of `A * N / 2` from the unwindowed transform, and the Hann
+        // window removes another factor of its *coherent gain*, which is
+        // exactly 0.5 (the window's mean). So the peak is `A * N / 4`, and
+        // dividing by `N / 4` -- i.e. multiplying by `4 / N` -- is what maps
+        // `A = 1.0` to 0 dB. Using `2 / N` here (the unwindowed constant)
+        // under-reports every magnitude by a factor of two, which reads as a
+        // uniform -6 dB on every bin and looks plausibly like "quiet audio"
+        // rather than like a bug.
+        let norm = 4.0 / FFT_SIZE as f32;
+        // The published parameter is a percentage; the one-pole wants a 0..1
+        // coefficient. Converting at the single point of use - rather than
+        // storing a fraction - is what makes a read return exactly what a write
+        // accepted, since 95.0 / 100.0 * 100.0 is not exact in f32.
+        let alpha = (self.smoothing / 100.0).clamp(0.0, MAX_SMOOTHING_PERCENT / 100.0);
         for bin in 0..BIN_COUNT {
             let magnitude = sqrt(self.re[bin] * self.re[bin] + self.im[bin] * self.im[bin]) * norm;
             let db = if magnitude > 1e-9 {
                 20.0 * log10(magnitude)
             } else {
-                -144.0
+                FLOOR_DB
             };
             // One-pole smoothing in the dB domain, which is what makes the
             // display readable instead of flickering.
+            //
+            // The stored value is floored at `FLOOR_DB`, which is strictly
+            // above `UNSET_DB`. Without that clamp, a bin decaying towards the
+            // floor could reach the sentinel region and be treated as
+            // "unset" on the next frame, re-seeding it and making the display
+            // jump instead of settling.
             let previous = self.bins_db[bin];
-            self.bins_db[bin] = if previous <= -143.0 {
+            let smoothed = if previous <= UNSET_DB + 1.0 {
                 db
             } else {
                 previous * alpha + db * (1.0 - alpha)
             };
+            self.bins_db[bin] = smoothed.max(FLOOR_DB);
         }
     }
 }
@@ -315,7 +357,13 @@ impl EffectProcessor for SpectrumAnalyser {
         self.ring = alloc::vec![0.0; FFT_SIZE];
         self.re = alloc::vec![0.0; FFT_SIZE];
         self.im = alloc::vec![0.0; FFT_SIZE];
-        self.bins_db = alloc::vec![-120.0; BIN_COUNT];
+        // `UNSET_DB` rather than a plausible-looking -120: the smoothing below
+        // treats the sentinel as "no previous frame, seed directly", and a
+        // floor value that the analyser could also legitimately produce would
+        // make the first frames blend up from it instead of seeding. That
+        // reads as the display slowly fading in, and it makes two identical
+        // frames differ by however far the fade has left to run.
+        self.bins_db = alloc::vec![UNSET_DB; BIN_COUNT];
         self.build_tables();
         self.reset();
     }
@@ -348,7 +396,10 @@ impl EffectProcessor for SpectrumAnalyser {
     fn reset(&mut self) {
         self.ring.iter_mut().for_each(|s| *s = 0.0);
         self.write = 0;
-        self.bins_db.iter_mut().for_each(|b| *b = -120.0);
+        // `UNSET_DB`, so the next frame seeds the smoother instead of fading
+        // in from a floor value. A reset means "forget the history", which is
+        // exactly the condition the sentinel represents.
+        self.bins_db.iter_mut().for_each(|b| *b = UNSET_DB);
     }
 
     fn latency_samples(&self) -> usize {
@@ -368,7 +419,11 @@ impl EffectProcessor for SpectrumAnalyser {
         let value = clamp_parameter(&spec, value);
         match sub {
             PARAM_ENABLED => self.enabled = value >= 0.5,
-            PARAM_SMOOTHING => self.smoothing = value,
+            // Stored in the published *percent*, so a read returns exactly what
+            // a write accepted (round-tripping 95.0 through a 0..1 fraction and
+            // back is not exact in f32). The conversion to the one-pole's 0..1
+            // coefficient happens at the single point of use in `analyse`.
+            PARAM_SMOOTHING => self.smoothing = value.clamp(0.0, MAX_SMOOTHING_PERCENT),
             PARAM_MIN_DB => self.min_db = value,
             PARAM_MAX_DB => self.max_db = value,
             _ => {}
@@ -570,8 +625,17 @@ mod tests {
     fn smoothing_reduces_frame_to_frame_jitter() {
         let mut smoothed = make();
         smoothed.set_parameter(PARAM_SMOOTHING, 0.9);
-        let a = analyse_tone(&mut smoothed, 1_000.0);
-        let b = analyse_tone(&mut smoothed, 1_000.0);
+
+        // Measured on an *exact* FFT bin, so the input is genuinely identical
+        // from frame to frame. A tone between bins leaks with a phase that
+        // depends on where the analysis window starts, so two frames of the
+        // same signal legitimately differ - that is real spectral leakage, not
+        // display jitter, and testing smoothing with it would conflate the two.
+        // 1024 samples at 48 kHz gives 46.875 Hz per bin, so bin 64 is 3 kHz.
+        let bin_hz = 3000.0;
+        let a = analyse_tone(&mut smoothed, bin_hz);
+        let b = analyse_tone(&mut smoothed, bin_hz);
+
         // With heavy smoothing two identical inputs must give nearly identical
         // frames: that is what makes the display readable.
         let max_delta = a
@@ -579,6 +643,22 @@ mod tests {
             .zip(b.iter())
             .fold(0.0_f32, |m, (x, y)| m.max((x - y).abs()));
         assert!(max_delta < 3.0, "smoothed frames differed by {max_delta} dB");
+    }
+
+    #[test]
+    fn an_off_bin_tone_still_reads_the_right_level() {
+        // The counterpart to the test above: smoothing is measured on an exact
+        // bin, so this pins down that a tone *between* bins still reads its
+        // true level rather than a notched-down one. Without it, calibrating
+        // away the leakage would be indistinguishable from hiding it.
+        let mut effect = make();
+        effect.set_parameter(PARAM_SMOOTHING, 0.0);
+        let bins = analyse_tone(&mut effect, 1_000.0);
+        let peak = bins.iter().fold(-200.0_f32, |m, b| m.max(*b));
+        assert!(
+            (-6.0..=3.0).contains(&peak),
+            "a 1 kHz tone between bins read {peak} dB, expected about 0"
+        );
     }
 
     #[test]

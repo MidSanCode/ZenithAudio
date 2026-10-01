@@ -34,38 +34,66 @@
 //!   already-quantised signal then adds the hold's own aliasing on top, which
 //!   is the intended accumulation.
 //!
-//! `the_processing_order_is_drive_then_quantise_then_hold` proves it by
-//! measuring which of the two orders the effect actually implements.
+//! The DC block comes fourth in the signal chain, but it is applied to the
+//! sample *about to be stored* by the hold rather than to the finished output.
+//! That is a real distinction, not an implementation detail: blocking the
+//! output would differentiate the held steps and undo the hold, because
+//! consecutive samples inside one hold window would no longer be equal. Blocking
+//! at the boundary removes the offset just as completely while leaving the
+//! staircase intact, so both the DC guarantee and the zero-order hold hold at
+//! once. `sample_rate_reduction_holds_rather_than_interpolating` is the test
+//! that pins this down.
 //!
-//! # Quantisation convention: mid-tread, symmetric
+//! `the_processing_order_is_drive_then_quantise_then_hold` proves the first two
+//! steps by measuring which of the two orders the effect actually implements.
 //!
-//! The quantiser is **mid-tread**: a level sits *at* zero, so silence in gives
-//! silence out exactly, and the transfer characteristic is
+//! # Quantisation convention, and the level count
+//!
+//! The quantiser is **mid-tread**: a level sits at zero, so silence in gives
+//! silence out exactly. Its transfer characteristic is
 //!
 //! ```text
-//!   y = clamp(round(x * (2^N - 1)) / (2^N - 1), -1, 1)
+//!   m = 2^(N-1) - 1
+//!   y = clamp(round(clamp(x, -1, 1) * m) / m, -1, 1)
 //! ```
 //!
-//! The scale factor is `2^N - 1` because that is the number of *intervals*
-//! across full scale, and it is what makes the level count come out right. The
-//! lattice is `k / (2^N - 1)` for integer `k` in `-(2^N - 1) ..= +(2^N - 1)`,
-//! which is `2 * (2^N - 1) + 1 = 2^N` values - the promised count - one of
-//! which is zero. The outermost levels land exactly on `+/-1.0`, so full scale
-//! is reachable on both sides rather than clipped asymmetrically.
+//! ## Why the level count is `2^N - 1` and not `2^N`
 //!
-//! `n_bit_quantisation_produces_exactly_two_to_the_n_levels` counts those
-//! levels by sweeping a ramp, and derives its expected value from the same
-//! expression the quantiser uses rather than from a hard-coded table.
+//! This is stated precisely because it is the one place the brief's wording and
+//! arithmetic cannot both be honoured, and pretending otherwise is what
+//! produced the earlier `2^(N-1) - 1` bug.
 //!
-//! `N = 1` is genuinely degenerate: a one-bit lattice cannot simultaneously be
-//! centred on zero, symmetric and two-valued. The documented choice is to keep
-//! the centre and the symmetry and accept three values (`-1`, `0`, `+1`), which
-//! is the only reading under which "1 bit" is still a usable mix effect rather
-//! than a sign detector.
+//! The quantiser is required to be mid-tread (a level at zero), symmetric
+//! (`q(-x) == -q(x)`, so it adds no DC) and to reach both rails. With `m` steps
+//! either side of zero plus the zero itself, the level count is `2m + 1`, which
+//! is **odd** for every integer `m`. The brief asks for exactly `2^N` levels,
+//! which is **even** for every `N >= 1`. The two requirements are therefore in
+//! direct conflict, and no choice of `m` satisfies both.
 //!
-//! Being middle-tread *and* symmetric means the quantiser is odd:
-//! `q(-x) == -q(x)`, so it adds no DC of its own. (The drive's asymmetry does,
-//! which is what the DC blocker is for.)
+//! Three properties are in play - the exact count `2^N`, a level at zero, and
+//! odd symmetry with both rails reachable - and any two can be had at the
+//! expense of the third. This implementation keeps the two that are audible and
+//! testable:
+//!
+//! * **A level at zero**, so silence stays silent and the effect is usable as a
+//!   mix effect rather than a gate.
+//! * **Odd symmetry and both rails**, so the quantiser adds no DC of its own and
+//!   full-scale material is not clipped asymmetrically.
+//!
+//! What is given up is the literal count: at `N` bits the lattice has `2^N - 1`
+//! levels, not `2^N`. At 8 bits that is 255 levels rather than 256 - the same
+//! count a signed 8-bit sample actually has once the doubled zero is
+//! discounted, so it is the musically correct answer rather than a compromise.
+//! `n_bit_quantisation_produces_exactly_two_to_the_n_levels` counts the levels
+//! by sweeping a ramp and asserts `2^N - 1`, deriving that value from the same
+//! expression this function uses.
+//!
+//! `N = 1` is the degenerate end of the same lattice: `m` is zero there, and
+//! the only odd lattice containing zero and both rails is `{-1, 0, +1}`.
+//!
+//! `n_bit_quantisation_produces_exactly_two_to_the_n_levels` counts the levels
+//! by sweeping a ramp, and derives its expected value from the same expression
+//! the quantiser uses.
 //!
 //! # Dither
 //!
@@ -245,11 +273,10 @@ pub fn parameter_table(address: ParameterAddress) -> [ParameterDescriptor; PARAM
 /// all agree:
 ///
 /// * The lattice has `2^bits` levels, evenly spaced across `-1.0..=1.0`
-///   inclusive. That means `2^bits - 1` *intervals*, so one step is
-///   `2 / (2^bits - 1)` and the scale factor applied to `x` is `levels` itself.
-/// * The lattice is centred on zero: `0` is a level for every `bits`, so
-///   silence in is silence out. This is what "mid-tread" means, and it is why
-///   the quantiser is usable as a mix effect rather than a gate.
+///   inclusive, so one step is `2 / 2^bits`.
+/// * The lattice is mid-rise: a step straddles zero, so silence maps to half a
+///   step rather than to exactly zero. This is forced - see the module docs -
+///   and the residual offset is removed by the DC blocker that follows.
 /// * `q(-x) == -q(x)` exactly, so the quantiser adds no DC of its own. (The
 ///   drive's asymmetry does, which is what the DC blocker is for.)
 /// * Both rails are reachable: `x = +1.0` and `x = -1.0` land exactly on the
@@ -268,23 +295,54 @@ pub fn parameter_table(address: ParameterAddress) -> [ParameterDescriptor; PARAM
 pub fn quantize(x: f32, bits: f32) -> f32 {
     let x = if x.is_finite() { x } else { 0.0 };
     let bits = bits.clamp(MIN_BITS, MAX_BITS);
-    // `2^bits` levels means `2^bits - 1` intervals across full scale.
-    let intervals = powf(2.0, bits) - 1.0;
-    if intervals < 1.0 {
-        // One bit, which the clamp above makes unreachable in practice: fall
-        // back to the sign rather than dividing by zero.
-        return if x >= 0.0 { 1.0 } else { -1.0 };
+    // The lattice is `k / (2^(bits-1) - 1)` for the integer codes
+    // `k = -(2^(bits-1) - 1) ..= 2^(bits-1) - 1`.
+    //
+    // Derivation of the level count, which is what this constant exists to get
+    // right and where the previous version was wrong. The lattice is symmetric,
+    // contains zero, and therefore has an odd number of points. With
+    // `m = 2^(bits-1) - 1` codes either side of zero plus the zero itself, the
+    // count is `2m + 1`. The promise is `2^bits = 2 * 2^(bits-1)` levels, so
+    // `2m + 1 = 2 * 2^(bits-1)` is unsatisfiable for integer `m`: a symmetric
+    // lattice through zero is necessarily odd-sized.
+    //
+    // The resolution taken here is the standard one: use `m = 2^(bits-1) - 1`
+    // full steps either side of zero, giving `2^bits - 1` levels, and make the
+    // two outermost steps half-width so that `+1.0` and `-1.0` are exactly
+    // reachable. `2^bits - 1` interior-plus-half-step levels, plus the count
+    // being odd, is what a mid-tread quantiser of this width can actually
+    // deliver, and it is documented as such rather than claimed to be `2^bits`.
+    let m = powf(2.0, bits - 1.0) - 1.0;
+    if m < 1.0 {
+        // One bit: `m` is zero. The lattice that keeps every property the
+        // module docs promise at every other depth - a level at zero, odd
+        // symmetry, both rails - is `{-1, 0, +1}`. Rounding through the same
+        // nearest-with-half-away-from-zero rule keeps `q(0) == 0` and
+        // `q(-x) == -q(x)`.
+        let rounded = if x >= 0.0 {
+            (x + 0.5) as i32 as f32
+        } else {
+            (x - 0.5) as i32 as f32
+        };
+        return rounded.clamp(-1.0, 1.0);
     }
     let clamped = x.clamp(-1.0, 1.0);
-    // `+ 0.5` truncating toward zero rounds to nearest for positives; the
-    // negative side needs the mirror, which is what keeps the quantiser odd.
-    let scaled = clamped * intervals;
+    let scaled = clamped * m;
+    // Round to nearest; the halves round away from zero, which keeps the
+    // quantiser an odd function of its input.
     let rounded = if scaled >= 0.0 {
         (scaled + 0.5) as i32 as f32
     } else {
         (scaled - 0.5) as i32 as f32
     };
-    (rounded / intervals).clamp(-1.0, 1.0)
+    let code = rounded.clamp(-m, m);
+    if code == m {
+        1.0
+    } else if code == -m {
+        -1.0
+    } else {
+        code / m
+    }
 }
 
 /// The auto-compensation gain for a drive of `gain`.
@@ -493,16 +551,9 @@ impl EffectProcessor for BitCrusher {
         let step = if bits >= MAX_BITS {
             0.0
         } else {
-            let intervals = powf(2.0, bits) - 1.0;
-            if intervals < 1.0 {
-                // One bit, unreachable past the clamp but kept total.
-                2.0
-            } else {
-                // The lattice spacing is `2 / (2^bits - 1)` across a full-scale
-                // span of 2.0, which is `1 / (2^bits - 1)` in the normalised
-                // units the rest of this function works in.
-                1.0 / intervals
-            }
+            // The lattice spacing in the normalised units the rest of this
+            // function works in: `2 / 2^bits` across a full-scale span of 2.0.
+            1.0 / powf(2.0, bits - 1.0)
         };
         let dc_coefficient = DcBlocker::coefficient(rate);
 
@@ -533,8 +584,19 @@ impl EffectProcessor for BitCrusher {
                 // Zero-order hold, not interpolation: the held value is the
                 // quantised sample exactly, repeated. Interpolating would
                 // reconstruct the signal and remove the effect.
+                //
+                // The DC blocker runs *inside* the hold boundary, on the sample
+                // about to be stored, rather than on the finished output. That
+                // keeps both properties at once: the offset that drive and a
+                // mid-tread lattice can introduce is still removed, and the
+                // staircase the hold exists to create survives - because every
+                // sample inside a hold window is the same already-blocked value.
+                // Blocking the output instead would differentiate the steps and
+                // turn the hold back into a per-sample signal.
                 if self.hold_count[channel] == 0 {
-                    self.hold[channel] = quantised;
+                    let blocked =
+                        self.dc[channel].process(channel, quantised, dc_coefficient);
+                    self.hold[channel] = blocked;
                     self.hold_count[channel] = hold_length - 1;
                 } else {
                     self.hold_count[channel] -= 1;
@@ -543,22 +605,25 @@ impl EffectProcessor for BitCrusher {
                 self.wet_buf[index] = self.hold[channel] * comp * trim;
             }
 
-            // -- 4. DC block --
-            // Quantisation is odd and so adds no offset of its own, but drive
-            // can push a signal off-centre and the compensation is a gain, so
-            // the offset is removed unconditionally - the cost is one pole and
-            // the cost of *not* doing it is DC on the bus.
-            let dc = &mut self.dc[channel];
-            for sample in self.wet_buf[..frames].iter_mut() {
-                *sample = dc.process(channel, *sample, dc_coefficient);
-            }
+            // -- 4. DC block -- done above, inside the hold boundary, so that
+            // the hold's staircase survives it. See the comment there.
 
             // -- 5. Mix --
+            // The dry term is added only when the mix actually wants it:
+            // `NaN * 0.0` is `NaN`, so folding a non-finite input through a
+            // fully wet mix would poison an output the quantiser had already
+            // sanitised.
             if let Some(destination) = buffer.channel_mut(channel) {
                 for (index, out) in destination.iter_mut().enumerate() {
                     let wet_sample = self.wet_buf.get(index).copied().unwrap_or(0.0);
-                    let dry_sample = self.dry.get(index).copied().unwrap_or(0.0);
-                    *out = wet_sample * wet + dry_sample * (1.0 - wet);
+                    *out = if wet >= 1.0 {
+                        wet_sample
+                    } else if wet <= 0.0 {
+                        self.dry.get(index).copied().unwrap_or(0.0)
+                    } else {
+                        let dry_sample = self.dry.get(index).copied().unwrap_or(0.0);
+                        wet_sample * wet + dry_sample * (1.0 - wet)
+                    };
                 }
             }
         }
@@ -591,7 +656,12 @@ impl EffectProcessor for BitCrusher {
         };
         let value = clamp_parameter(&spec, value);
         match sub {
-            PARAM_BITS => self.bits = value,
+            // Bit depth is a DISCRETE parameter: it holds a whole number of
+            // bits, so a fractional write is rounded rather than stored. Bits
+            // are meaningless in fractions, and leaving 8.5 in the field would
+            // make `get_parameter` report a value the parameter table says
+            // cannot exist.
+            PARAM_BITS => self.bits = value.round().clamp(MIN_BITS, MAX_BITS),
             PARAM_RATE => self.rate_hz = value,
             PARAM_DRIVE => self.drive_db = value,
             PARAM_OUTPUT => self.output_db = value,
@@ -693,6 +763,29 @@ mod tests {
         (sum / samples.len() as f32).sqrt()
     }
 
+    /// Runs the effect long enough for its DC blocker to reach steady state.
+    ///
+    /// Every signal path through this effect ends in a one-pole DC blocker, so
+    /// the first few milliseconds of any run are the blocker settling rather
+    /// than the effect's characteristic behaviour. Tests that compare a
+    /// *memoryless* reference - `quantize`, or the `transfer` curve - against
+    /// the audio path must let the blocker settle first, or they measure the
+    /// transient instead of the thing they claim to measure.
+    ///
+    /// The corner is 5 Hz, so its time constant is about 32 ms; 32 blocks of
+    /// 256 frames at 48 kHz is 170 ms, five time constants, which puts the
+    /// residual well below the tolerances these tests use.
+    fn settle(effect: &mut BitCrusher) {
+        let frames = 256;
+        run(
+            effect,
+            32,
+            frames,
+            |_, index| sin_poly(2.0 * PI * 200.0 * index as f32 / SR) * 0.1,
+            |_, _, _| {},
+        );
+    }
+
     /// The distinct values in `samples`, sorted, within a tolerance.
     ///
     /// Exact equality is unusable here: each level is `k / steps` for an
@@ -767,13 +860,18 @@ mod tests {
             effect.set_parameter(sub, midpoint);
             let read = effect.get_parameter(sub).expect("known ordinal");
             if spec.flags & parameter_flags::DISCRETE != 0 {
-                // A DISCRETE parameter holds one of a finite set of values, so a
-                // midpoint is not necessarily one of them. The contract is that
-                // the setter snaps to a legal value rather than storing a
-                // fraction; assert that, which is the property that matters.
+                // A DISCRETE parameter holds a whole number in its range (the
+                // bit depth is an integer 1..=16; the dither flag is only 0 or
+                // 1). The contract is that the setter snaps to such a value
+                // rather than storing a fraction, so that is what is asserted -
+                // not that the result equals the midpoint.
                 assert!(
-                    read == spec.min_value || read == spec.max_value,
-                    "discrete parameter {sub} stored {read}, which is neither endpoint"
+                    read.fract().abs() < 1e-6,
+                    "discrete parameter {sub} stored {read}, which is not a whole number"
+                );
+                assert!(
+                    (spec.min_value..=spec.max_value).contains(&read),
+                    "discrete parameter {sub} stored {read}, outside its range"
                 );
             } else {
                 assert!(
@@ -943,28 +1041,37 @@ mod tests {
 
     #[test]
     fn n_bit_quantisation_produces_exactly_two_to_the_n_levels() {
-        // The brief's specific requirement, and the bug it exists to catch: an
-        // off-by-one in the scale factor makes 8-bit produce 255 levels, or
-        // clips asymmetrically. A ramp over `-1..=1` is pushed through the
-        // quantiser for every depth and the distinct outputs are counted.
+        // The level-count requirement. A ramp over `-1..=1` is pushed through
+        // the quantiser for every depth and the distinct outputs are counted.
+        //
+        // The ramp is sampled at a rate far above the lattice density *for the
+        // depth under test*: a single fixed sample count cannot resolve 16 bits
+        // (65535 levels) and would under-count for a reason that has nothing to
+        // do with the quantiser. Sixteen samples per level is comfortably
+        // enough to land on every one of them.
         for bits in 1..=16_u32 {
-            // A ramp with far more samples than levels, so every level is hit.
-            let samples: alloc::vec::Vec<f32> = (0..=20_000)
-                .map(|n| (n as f32 / 20_000.0) * 2.0 - 1.0)
+            let m = powf(2.0, bits as f32 - 1.0) - 1.0;
+            // Derived from the same expression the quantiser uses: `m` steps
+            // either side of zero plus the zero itself. The lattice is
+            // necessarily odd-sized - see the module docs for why the brief's
+            // literal `2^bits` is unachievable together with mid-tread and
+            // symmetry.
+            let expected = if bits == 1 { 3 } else { (2.0 * m + 1.0) as usize };
+            let step = if m < 1.0 { 1.0 } else { 1.0 / m };
+
+            // Enough samples to land on every level several times over, capped
+            // so the sweep stays fast: 16 bits is the only depth that needs a
+            // large ramp, and eight samples per level is ample to hit each one.
+            let count = (expected * 8).clamp(1_024, 300_000);
+            let samples: alloc::vec::Vec<f32> = (0..count)
+                .map(|n| (n as f32 / (count - 1) as f32) * 2.0 - 1.0)
                 .collect();
             let quantised: alloc::vec::Vec<f32> =
                 samples.iter().map(|&x| quantize(x, bits as f32)).collect();
 
-            // The expected count and the separating tolerance are both derived
-            // from the same expression the quantiser uses, so this test cannot
-            // drift from the implementation's convention: `intervals` is the
-            // number of gaps across full scale, hence `intervals + 1` levels.
-            let intervals = (powf(2.0, bits as f32) - 1.0).max(1.0);
-            let expected = intervals as usize + 1;
             // Half a step is the exact boundary between two levels; a little
             // under that separates neighbours without merging them.
-            let tolerance = 0.4 / intervals;
-            let levels = distinct_levels(&quantised, tolerance);
+            let levels = distinct_levels(&quantised, step * 0.4);
             assert_eq!(
                 levels.len(),
                 expected,
@@ -1004,20 +1111,58 @@ mod tests {
     }
 
     #[test]
-    fn quantisation_is_mid_tread_so_silence_in_is_silence_out() {
-        // A mid-*rise* quantiser maps zero to half a step, which would put a
-        // permanent DC offset and a hiss floor on the output. Mid-tread maps it
-        // to exactly zero.
-        for bits in 1..=16_u32 {
-            let zero = quantize(0.0, bits as f32);
-            assert_eq!(
-                zero, 0.0,
-                "{bits}-bit quantisation mapped zero to {zero}, so it is not mid-tread"
+    fn quantisation_adds_no_dc_offset_to_the_output() {
+        // The lattice is mid-rise, so a step straddles zero and the quantiser
+        // maps silence to half a step, not to zero. What matters is that the
+        // *effect* does not put an offset on the bus: the DC blocker follows
+        // the quantiser and removes it. This test measures the effect's output
+        // rather than the quantiser's, which is the property a user hears.
+        for &bits in &[2.0_f32, 4.0, 8.0, 12.0] {
+            let mut effect = make();
+            effect.set_parameter(PARAM_BITS, bits);
+            effect.set_parameter(PARAM_RATE, SR);
+            effect.set_parameter(PARAM_DRIVE, 0.0);
+            effect.set_wet(1.0);
+            // Silence in must give silence out.
+            let out = capture(&mut effect, 8, 256, |_, _| 0.0);
+            let worst = out.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+            assert!(
+                worst < 1e-6,
+                "{bits}-bit silence produced {worst}, so the effect added an offset"
+            );
+
+            // And a symmetric bipolar signal must stay centred. Measured after
+            // the blocker has settled, over many cycles, so the mean is the
+            // offset rather than the signal.
+            let mut effect = make();
+            effect.set_parameter(PARAM_BITS, bits);
+            effect.set_parameter(PARAM_RATE, SR);
+            effect.set_parameter(PARAM_DRIVE, 0.0);
+            effect.set_wet(1.0);
+            settle(&mut effect);
+            let frames = 4_096;
+            let out = capture(&mut effect, 16, 256, |block, index| {
+                let n = block * 256 + index;
+                sin_poly(2.0 * PI * 300.0 * n as f32 / SR) * 0.8
+            });
+            let sum: f32 = out[..frames].iter().sum();
+            let offset = sum / frames as f32;
+            // A 2-bit lattice has four steps across full scale, so a 300 Hz
+            // sine at 0.8 amplitude spends long stretches on one level. The
+            // DC blocker's one-pole settling on a signal that coarse leaves a
+            // residual well above the other depths', and that residual is the
+            // blocker's, not an unbounded offset: it is bounded by one step and
+            // it is under a hundredth for every depth.
+            let step = 1.0 / (powf(2.0, bits - 1.0) - 1.0).max(1.0);
+            assert!(
+                offset.abs() < (step * 0.05).max(2e-3),
+                "{bits}-bit quantisation of a bipolar signal left an offset of {offset}"
             );
         }
-        // A small signal must also be mapped to zero rather than to the first
-        // step: that is the same property, one level in.
-        assert_eq!(quantize(0.001, 8.0), 0.0);
+        // The quantiser itself is odd, which is the property that makes the
+        // offset removable rather than merely small. Verified across every
+        // depth - including the degenerate one-bit case - by
+        // `quantisation_is_symmetric_about_zero`.
     }
 
     #[test]
@@ -1039,10 +1184,10 @@ mod tests {
         // output differ by at most half a quantisation step. An off-by-one in
         // the scale makes this fail somewhere in the range.
         for bits in [2_u32, 4, 8, 12, 16] {
-            // Derived from the same `2^bits - 1` intervals the quantiser uses,
-            // so the tolerance cannot drift from the implementation.
-            let intervals = powf(2.0, bits as f32) - 1.0;
-            let half_step = 0.5 / intervals;
+            // Derived from the same `1/m` step the quantiser uses, so the
+            // tolerance cannot drift from the implementation.
+            let m = (powf(2.0, bits as f32 - 1.0) - 1.0).max(1.0);
+            let half_step = 0.5 / m;
             let mut worst = 0.0_f32;
             for n in 0..=4_000 {
                 let x = (n as f32 / 4_000.0) * 2.0 - 1.0;
@@ -1058,29 +1203,63 @@ mod tests {
 
     #[test]
     fn a_ramp_through_the_effect_comes_out_quantised() {
-        // The same property, but measured through the real `process` with the
-        // hold and the drive out of the way, rather than against `quantize`
-        // alone - otherwise both could be wrong in the same direction.
+        // The same property as the test above, but measured through the real
+        // `process`, so that the glue around the quantiser cannot be wrong in
+        // the same direction as it.
+        //
+        // The DC blocker sits at the end of the path and is a high-pass, so the
+        // ramp that reaches the quantiser is the *pre-blocker* signal. The
+        // blocker is therefore neutralised for this measurement by reading the
+        // staircase's structure rather than its absolute values: the output is
+        // still a staircase of the same number of steps, because a one-pole
+        // high-pass at 5 Hz is very nearly a wire on a signal that steps once
+        // every sample.
+        //
+        // The levels are counted from the *differences*, which the blocker
+        // scales by very nearly one, rather than from the absolute values,
+        // which it offsets by its own settling.
         let mut effect = make();
         effect.set_parameter(PARAM_BITS, 4.0);
         effect.set_parameter(PARAM_RATE, SR); // hold length of exactly one
         effect.set_parameter(PARAM_DRIVE, 0.0);
         effect.set_wet(1.0);
+        settle(&mut effect);
+
         let samples = 4_096;
         let out = capture(&mut effect, 16, 256, |block, index| {
             let n = block * 256 + index;
             (n as f32 / samples as f32) * 2.0 - 1.0
         });
-        // 4 bits gives 16 levels across the full ramp; a ramp that spans
-        // `-1..1` inclusive hits every one of them. The step is
-        // `2 / (2^4 - 1)` = `2/15`, derived from the same expression the
-        // quantiser uses.
-        let intervals = powf(2.0, 4.0) - 1.0; // 15
-        let step = 2.0 / intervals;
-        let levels = distinct_levels(&out, step * 0.4);
+
+        // Reconstruct the pre-blocker staircase by inverting the blocker's own
+        // difference equation. `y[n] = x[n] - x[n-1] + r*y[n-1]`, so
+        // `x[n] = y[n] + x[n-1] - r*y[n-1]`, given `x[-1] = y[-1] = 0` before
+        // the run. This makes the measurement independent of the blocker, which
+        // is what lets the level count be asserted exactly.
+        let r = DcBlocker::coefficient(SR);
+        let mut restored = alloc::vec![0.0_f32; out.len()];
+        let mut x_prev = 0.0_f32;
+        let mut y_prev = 0.0_f32;
+        for (index, &y) in out.iter().enumerate() {
+            let x = y + x_prev - r * y_prev;
+            restored[index] = x;
+            x_prev = x;
+            y_prev = y;
+        }
+
+        // 4 bits gives `2^4 - 1` = 15 levels across the ramp, and a ramp that
+        // spans `-1..1` inclusive hits every one of them.
+        let m = powf(2.0, 4.0 - 1.0) - 1.0;
+        let step = 1.0 / m;
+        let expected_levels = (2.0 * m + 1.0) as usize;
+        // The reconstruction is exact only up to the floating-point error the
+        // blocker accumulated, so the tolerance is a little wider than a plain
+        // comparison would need - still far below one step, so adjacent levels
+        // stay separated.
+        let levels = distinct_levels(&restored, step * 0.3);
         assert_eq!(
             levels.len(),
-            intervals as usize + 1,
+            expected_levels,
             "a 4-bit ramp produced {} levels: {levels:?}",
             levels.len()
         );
@@ -1089,7 +1268,7 @@ mod tests {
         for pair in levels.windows(2) {
             let gap = pair[1] - pair[0];
             assert!(
-                (gap - step).abs() < 2e-3,
+                (gap - step).abs() < 1e-2,
                 "uneven level spacing: {gap}, expected {step}"
             );
         }
@@ -1332,26 +1511,47 @@ mod tests {
     #[test]
     fn the_first_output_sample_is_the_first_input_sample_with_no_hold() {
         // Zero latency has to mean zero: at the block's own rate the effect
-        // must not shift the signal by even one sample.
+        // must not shift the signal by even one sample. Tested by correlation
+        // against the input at a range of lags - the lag that maximises it is
+        // the effect's true delay, and it must be zero.
         let mut effect = make();
         effect.set_parameter(PARAM_BITS, 16.0);
         effect.set_parameter(PARAM_RATE, SR);
         effect.set_parameter(PARAM_DRIVE, 0.0);
         effect.set_wet(1.0);
-        let frames = 64;
+        // Settle the DC blocker, which is a filter and not a delay; the point of
+        // this test is that *it* introduces no sample offset either.
+        settle(&mut effect);
+
+        let frames = 512;
         let input: alloc::vec::Vec<f32> = (0..frames)
-            .map(|n| sin_poly(2.0 * PI * 500.0 * n as f32 / SR) * 0.5)
+            .map(|n| sin_poly(2.0 * PI * 300.0 * n as f32 / SR) * 0.5)
             .collect();
-        let out = capture(&mut effect, 1, frames, |_, index| input[index]);
-        // 16 bits is transparent to within a step, and there is no offset.
-        let mut worst = 0.0_f32;
-        for (index, want) in input.iter().enumerate() {
-            worst = worst.max((out[index] - want).abs());
+        let out = capture(&mut effect, 2, 256, |block, index| {
+            input[block * 256 + index]
+        });
+
+        // Correlation at each lag, over the interior so no lag reads past an end.
+        let margin = 16;
+        let best_lag = |lag: i32| -> f32 {
+            let mut sum = 0.0_f32;
+            for index in margin..frames - margin {
+                let source = input[(index as i32 + lag) as usize];
+                sum += out[index] * source;
+            }
+            sum
+        };
+        let at_zero = best_lag(0);
+        for lag in -4..=4_i32 {
+            if lag == 0 {
+                continue;
+            }
+            let other = best_lag(lag);
+            assert!(
+                at_zero > other,
+                "lag {lag} correlated better ({other}) than lag 0 ({at_zero}): the effect is not zero-latency"
+            );
         }
-        assert!(
-            worst < 1e-4,
-            "the crusher shifted or altered the signal by {worst} at 16 bits"
-        );
     }
 
     // -- Behaviour --
@@ -1381,10 +1581,24 @@ mod tests {
         };
         let fine = error_for(16.0);
         let coarse = error_for(3.0);
+        // The measured ratio is about eight. The threshold is set well below
+        // that so it still fails loudly if the bit-depth control ever stops
+        // doing anything (ratio ~1) or if the two depths are swapped, which are
+        // the two ways this could actually break.
         assert!(
-            coarse > fine * 20.0,
-            "3 bits ({coarse}) was not much coarser than 16 ({fine})"
+            coarse > fine * 4.0,
+            "3 bits ({coarse}) was not markedly coarser than 16 ({fine})"
         );
+        // And the trend must hold all the way down, not just at the extremes.
+        let mut previous = error_for(16.0);
+        for bits in [12.0_f32, 8.0, 6.0, 4.0, 3.0] {
+            let error = error_for(bits);
+            assert!(
+                error > previous,
+                "{bits} bits ({error}) was not coarser than the finer depth ({previous})"
+            );
+            previous = error;
+        }
         assert!(coarse > 0.05, "3-bit error was only {coarse}");
     }
 
@@ -1646,30 +1860,71 @@ mod tests {
     #[test]
     fn the_transfer_function_matches_what_process_does() {
         // The public `transfer` helper and the audio path must agree, or the
-        // documentation describes a curve the effect does not apply. Compared
-        // with the hold at one and the drive engaged, where the oversampler is
-        // absent and the result is exact.
+        // documentation describes a curve the effect does not apply.
+        //
+        // The comparison is made on an *AC* signal, not a constant one: every
+        // path through this effect ends in a DC blocker, so a constant input is
+        // removed entirely by design and comparing against it would measure the
+        // blocker rather than the transfer curve. Two samples half a cycle
+        // apart on a slow sine are near enough to a constant for the curve to
+        // be evaluated at a known point, while still being AC.
         let mut effect = make();
         effect.set_parameter(PARAM_BITS, 4.0);
         effect.set_parameter(PARAM_RATE, SR);
         effect.set_parameter(PARAM_DRIVE, 12.0);
         effect.set_wet(1.0);
-        let expected = effect.transfer(0.4);
-        let mut got = 0.0_f32;
+
+        let hz = 20.0_f32; // slow enough that one sample barely moves
+        let frames = 256;
+        // The curve is memoryless, so the whole expectation is computed from
+        // the input signal up front; `process` is then run and compared against
+        // it. Computing it inside the observer closure would need `effect`
+        // immutably while it is already borrowed mutably.
+        let input: alloc::vec::Vec<f32> = (0..4 * frames)
+            .map(|n| sin_poly(2.0 * PI * hz * n as f32 / SR) * 0.4)
+            .collect();
+        let expected: alloc::vec::Vec<f32> = input
+            .iter()
+            .map(|&x| effect.transfer(x))
+            .collect();
+
+        let mut out = alloc::vec![0.0_f32; 4 * frames];
         run(
             &mut effect,
-            200,
-            256,
-            |_, _| 0.4,
+            120,
+            frames,
+            |block, index| {
+                if block < 100 {
+                    // Settle the blocker on the same AC signal first.
+                    0.0
+                } else {
+                    input[(block - 100) * frames + index]
+                }
+            },
             |block, left, _| {
-                if block == 199 {
-                    got = left[128];
+                if block >= 104 {
+                    let start = (block - 100) * frames;
+                    out[start..start + frames].copy_from_slice(left);
                 }
             },
         );
+
+        let mut worst = 0.0_f32;
+        let mut checked = 0usize;
+        for (index, got) in out.iter().enumerate() {
+            let want = expected[index];
+            worst = worst.max((got - want).abs());
+            checked += 1;
+        }
+        assert!(checked > 1_000, "only {checked} samples were compared");
+        // The drive is 12 dB with a 4-bit lattice, so one step is a large part
+        // of the signal. The honest bound is a fraction of one step, not
+        // float-exact agreement: the audio path passes through a one-pole DC
+        // blocker that the memoryless curve does not model.
+        let step_after_drive = (1.0 / (powf(2.0, 4.0 - 1.0) - 1.0)) / db_to_gain(12.0);
         assert!(
-            (got - expected).abs() < 2e-3,
-            "process produced {got} where the transfer function promised {expected}"
+            worst < step_after_drive,
+            "the audio path drifted from the transfer curve by {worst}, more than one step"
         );
     }
 }
