@@ -33,8 +33,12 @@ void main() {
 
       final version = ZenithCore.version();
       expect(version, isNot(0));
-      // The stamp layout is major<<16 | minor<<8 | patch; v0.1.0 encodes as 256.
-      expect(version, 256);
+      // Derived from the single constant rather than hard-coded: the ABI minor
+      // counter is shared by every stage adding to it, so a literal here goes
+      // stale on someone else's commit and fails a test that is not about them.
+      // The *value* is pinned by `lib.rs`'s own test; this asserts only that
+      // the Dart constant and the loaded library agree.
+      expect(version, ZenithCore.expectedAbiVersion);
     });
 
     test('the Dart and Rust ABI versions agree', () {
@@ -69,7 +73,12 @@ void main() {
         return;
       }
 
-      expect(ZenithCore.versionString(), '0.1.0');
+      // Compared against the constant for the same reason as above, plus a
+      // shape check: the string must render the stamp's major/minor/patch so a
+      // mismatch report is actually readable.
+      final stamp = ZenithCore.expectedAbiVersion;
+      final expected = '${stamp >> 16}.${(stamp >> 8) & 0xFF}.${stamp & 0xFF}';
+      expect(ZenithCore.versionString(), expected);
     });
   });
 }

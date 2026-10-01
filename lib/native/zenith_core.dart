@@ -22,7 +22,16 @@ import 'package:ffi/ffi.dart';
 
 /// ABI version this Dart code was written against, in the same
 /// `major<<16 | minor<<8 | patch` layout the Rust side uses.
-const int kExpectedAbiVersion = 256; // 0.1.0
+///
+/// `0.3.0`. The minor counter is a **single linear sequence shared by every
+/// agent** adding to the ABI, not a per-stage number. S2 (parameter and
+/// automation) claimed `0.2.0`; S3 (mixer) then claimed `0.3.0` by bumping the
+/// same `ABI_VERSION` constant. This must therefore track whatever the core
+/// currently reports, not "the S2 number" — the runtime check is an exact
+/// comparison, so a stale constant fails loudly by design (ABI §2.3).
+///
+/// Registered as C-002 / C-009 in `docs/COORDINATION.md`.
+const int kExpectedAbiVersion = 768; // 0.3.0
 
 // ── C signatures ──
 
@@ -92,6 +101,14 @@ abstract final class ZenithCore {
     }
   }
 
+  /// The loaded library, or `null` when it is unavailable.
+  ///
+  /// Exposed for the parameter and automation bindings, which resolve their own
+  /// (much larger) symbol set and need the library handle to do it. Prefer
+  /// [isAvailable] for a yes/no question; this exists so those bindings do not
+  /// have to duplicate the library-loading and candidate-name logic.
+  static DynamicLibrary? libraryOrNull() => _load();
+
   static _VersionDart? _version;
   static _VersionMatchDart? _versionMatch;
   static _VersionStringDart? _versionString;
@@ -150,7 +167,7 @@ abstract final class ZenithCore {
     if (actual != kExpectedAbiVersion) {
       throw StateError(
         'zenith_core ABI mismatch: Dart expects $kExpectedAbiVersion '
-        '(0.1.0), the library reports $actual. Rebuild the Rust core.',
+        '(0.3.0), the library reports $actual. Rebuild the Rust core.',
       );
     }
   }

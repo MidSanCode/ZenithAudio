@@ -4,26 +4,30 @@
 > **地位**：本文件是 Dart 侧与 Rust 核心（`native/zenith_core/`）之间**唯一的跨语言契约**。
 > 属于 `docs/PLAN_DAW_PARITY.md` §4.2 第 1、2 条所称的「接口契约」，
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
-> **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 起补充 S0 实际落地状态
+> **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 补 S0 实际落地状态；
+> v1.1 补 S2 参数与自动化落地状态
 >
-> **当前实现状态（S0 已完成，2026-09-30 更新）**：
+> **当前实现状态（S0、S2 已完成，2026-10-04 更新）**：
 > `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
-> `lib/plugins/` **均已存在**并进入版本控制。S0 已导出并验证的符号为：
-> `zenith_version()` / `zenith_version_match(u32)` / `zenith_version_string()`，
-> 共 3 个，`ABI_VERSION = 0x000100`（0.1.0）。
-> 端到端已验证：`flutter build windows --debug` 会链接 Rust 静态库并把
-> `zenith_core.dll` 落在 exe 同级目录。
+> `lib/plugins/` **均已存在**并进入版本控制。
 >
-> 因此：本文件中标注 **[S0 落地]** 的条目**大部分仍是目标契约而非已实现事实**
-> ——S0 只交付了版本握手这一最小链路。DSP 图、sequencer、mixer、effects
-> 的 ABI 均待 S1–S5 逐步落地，落地时必须同步更新本文件。
+> - **S0**：版本三件套 `zenith_version()` / `zenith_version_match(u32)` /
+>   `zenith_version_string()`，端到端已验证 `flutter build windows --debug`
+>   会链接 Rust 静态库并把 `zenith_core.dll` 落在 exe 同级目录。
+> - **S2**：参数与自动化，`native/zenith_core/src/ffi/param_api.rs` 导出
+>   **45 个 `zenith_automation_*` 函数** + §6.4 列出的 6 个 `zenith_sizeof_*`、
+>   2 个边界查询与 1 个 flag 掩码查询。核心实现在
+>   `native/zenith_core/src/automation/`（7 个模块，268 个单元测试）。
 >
-> ⚠️ 已知不一致（S1 必须修复）：`Cargo.toml` 的 `[profile.release]` 当前写着
-> `panic = "abort"`，与本文原则 **P4**（panic 不得跨 FFI 边界，须 `catch_unwind`
-> 包裹）**直接矛盾**——`abort` 下 `catch_unwind` 永远无法捕获。见
-> `docs/PLAN_DAW_PARITY.md` §3 S1.0 前置项 A。
+> `ABI_VERSION = 0x000200`（**0.2.0**）。0.1.0 → 0.2.0 为 **minor** 提升：
+> 仅**新增**导出函数与结构体，未改动任何既有签名、字段顺序或枚举判别值，
+> 符合 §2.2 的向后兼容规则。提案登记于 `docs/COORDINATION.md` C-002。
 >
-> ⚠️ 本文件描述的是**我们自己**的 ABI。禁止在本仓库引入任何第三方 DAW 品牌名（§0.2）。
+> 因此：本文件中标注 **[S0 落地]** / **[S2 落地]** 的条目是**已实现事实**；
+> 其余（`[S1]`/`[S3]`/`[S4]`/`[S5]`/`[S6]`）仍是目标契约。DSP 图、sequencer、
+> mixer、effects 的 ABI 待后续阶段落地，落地时必须同步更新本文件。
+>
+> ⚠️ **本文件描述的是我们自己的 ABI。禁止在本仓库引入任何第三方 DAW 品牌名（§0.2）。**
 
 ---
 
@@ -346,25 +350,71 @@ ZenithStatusCode zenith_engine_status(const ZenithEngine* engine,
 > **写入方是音频线程、读取方是 UI 线程**：Rust 侧用 `AtomicU64`/`AtomicU32`
 > 打包写入（playhead 用 `AtomicI64`），保证读到的快照是**单一时刻的一致视图**，不撕裂。
 
-### 6.4 参数与自动化（**[S2]**，PLAN §3.S2）
+### 6.4 参数与自动化（**[S2 落地]**，PLAN §3.S2）
+
+> **S2 实际落地状态**：本节函数名与 [`ABI.md` 原契约](#) 有意不同。S2 提前于 S1
+> 落地，此时 `ZenithEngine` 尚不存在，因此参数与自动化挂在**独立句柄**
+> `ZenithAutomation` 上，函数前缀为 `zenith_automation_*`。
+>
+> 这不是临时方案：S1 的 `ZenithEngine` 落地后将**内嵌**一个
+> `ZenithAutomation`，而不是另建一份参数状态。届时本节函数会直接接受
+> `ZenithEngine*`（或提供一层转发），Dart 侧调用点不需要改写。
+> 详见 `docs/stages/s2-report.md` 的「与 S1 的接线」一节。
+>
+> 本节实际导出 **45 个函数**，全部在 `native/zenith_core/src/ffi/param_api.rs`。
 
 ```c
-/* 参数紧凑寻址：热路径不做字符串哈希（PLAN §3.S2 第 1 条） */
+/* 参数紧凑寻址：热路径不做字符串哈希（PLAN §3.S2 第 1 条）。
+   8 字节、无隐式填充。Rust 侧权威定义见 automation::ParameterAddress。 */
 typedef struct ZenithParamId {
   uint16_t kind;    /* 参数类别，见 ZenithParamKind */
   uint16_t sub;     /* 子索引（如 EQ 频段号） */
   uint32_t index;   /* 目标对象索引（通道号/轨道号/效果槽号） */
 } ZenithParamId;
 
-ZenithStatusCode zenith_param_set(ZenithEngine*, ZenithParamId, float value);
-ZenithStatusCode zenith_param_get(const ZenithEngine*, ZenithParamId, float* out_value);
+/* 句柄生命周期（控制线程，见 §5.3） */
+ZenithStatusCode zenith_automation_create(float sample_rate,
+                                          ZenithAutomation** out_handle);
+void            zenith_automation_destroy(ZenithAutomation*);   /* 空指针安全，幂等 */
+ZenithStatusCode zenith_automation_prepare(ZenithAutomation*, float sample_rate,
+                                           uint32_t lane_count);
 
-/* 平滑时间（防止 zipper noise，PLAN §3.S2 第 3 条），单位毫秒，1..50 */
-ZenithStatusCode zenith_param_set_smoothing(ZenithEngine*, ZenithParamId, float ms);
+/* 参数注册与查询（控制线程） */
+ZenithStatusCode zenith_automation_register_parameter(
+    ZenithAutomation*, uint16_t kind, uint32_t index, uint16_t sub,
+    const char* key, const char* label, uint32_t unit, uint32_t flags,
+    float min_value, float max_value, float default_value, float smoothing_ms);
+ZenithStatusCode zenith_automation_describe_parameter(
+    const ZenithAutomation*, ZenithParamId, ZenithParamDescriptor* out_desc);
+ZenithStatusCode zenith_automation_list_parameters(
+    const ZenithAutomation*, ZenithParamDescriptor* out_descs,
+    size_t capacity, size_t* out_count);      /* 两次调用协议：capacity=0 取总数 */
+
+/* 参数读写（**实时安全**，任意线程可调） */
+ZenithStatusCode zenith_automation_param_get(const ZenithAutomation*,
+                                             ZenithParamId, float* out_value);
+ZenithStatusCode zenith_automation_param_set(const ZenithAutomation*,
+                                             ZenithParamId, float value);
+
+/* 平滑时间（防止 zipper noise，PLAN §3.S2 第 3 条），单位毫秒，1..50。
+   越界值被钳制而非拒绝；查询边界用 zenith_smoothing_ms_min/_max()。 */
+ZenithStatusCode zenith_automation_param_set_smoothing(const ZenithAutomation*,
+                                                       ZenithParamId, float ms);
+
+/* 单点求值（控制线程，UI 预览用）：返回该帧上「基础值→自动化→调制→钳制」
+   的结果。这是求值语义的唯一权威实现，调用方不得自行插值。 */
+ZenithStatusCode zenith_automation_value_at(const ZenithAutomation*,
+                                            ZenithParamId, int64_t frame,
+                                            float* out_value);
 ```
 
 **求值顺序固定且文档化**（PLAN §3.S2 第 2 条）：
 `基础值 → 自动化 → 调制器累加 → 钳制`。
+
+该顺序在 Rust 侧**单点实现**于 `automation::player::AutomationPlayer::advance_block`
+与 `ffi::param_api::zenith_automation_value_at`，并由测试
+`automation::tests::the_evaluation_order_is_documented_and_single_sourced` 守卫——
+避免「文档写一套、代码写另一套」。
 
 ```c
 /* 参数描述符：Dart 侧据此自动生成效果器 UI（PLAN §3.S5「UI 自动生成」） */
@@ -373,18 +423,126 @@ typedef struct ZenithParamDescriptor {
   float    min_value;
   float    max_value;
   float    default_value;
-  uint32_t unit;          /* 0=线性 1=dB 2=Hz 3=秒 4=百分比 5=枚举 */
-  uint32_t flags;         /* 1=可自动化 2=离散 4=对数显示 */
-  const char* name_utf8;  /* 静态字符串，Dart 只读，不释放 */
-  const char* label_utf8;
+  float    smoothing_ms;  /* 默认平滑时间 */
+  uint32_t unit;          /* 0=线性 1=dB 2=Hz 3=秒 4=百分比 5=枚举 6=拍 */
+  uint32_t flags;         /* 1=可自动化 2=离散 4=对数显示 8=双极性 16=需平滑 */
+  const char* key_utf8;   /* 静态字符串，Dart 只读，不释放。稳定机器键 */
+  const char* label_utf8; /* 静态字符串，Dart 只读，不释放。面向用户的标签 */
 } ZenithParamDescriptor;
-
-ZenithStatusCode zenith_param_describe(const ZenithEngine*, ZenithParamId,
-                                       ZenithParamDescriptor* out_desc);
-ZenithStatusCode zenith_effect_describe_params(const ZenithEngine*, uint32_t effect_id,
-                                               ZenithParamDescriptor* out_descs,
-                                               size_t capacity, size_t* out_count);
 ```
+
+> **与本节初版契约的差异（向后兼容，均为追加）**：
+> `smoothing_ms` 与 `key_utf8` 为新增字段；`name_utf8` 更名为 `key_utf8`（S2
+> 落地前无任何调用方，故未走废弃流程）。枚举增加 `6=拍`。flags 增加
+> `8=双极性`、`16=需平滑`。`ZenithParamId` 字段顺序与宽度**未变**。
+
+```c
+/* 自动化点：24 字节，_reserved 保持在 0，保证跨目标尺寸一致 */
+typedef struct ZenithAutomationPoint {
+  int64_t frame;      /* 帧为单位的音乐时间，对齐 §3.5 tick 化基座 */
+  float   value;
+  float   tension;    /* -1..1，弯向右侧线段 */
+  uint32_t curve;     /* 0=线性 1=保持 2=曲线 3=指数 4=对数 */
+  uint32_t _reserved;
+} ZenithAutomationPoint;
+
+/* 轨道编辑（控制线程，会分配内存） */
+ZenithStatusCode zenith_automation_lane_create(ZenithAutomation*, ZenithParamId);
+ZenithStatusCode zenith_automation_lane_remove(ZenithAutomation*, ZenithParamId);
+ZenithStatusCode zenith_automation_lane_state(const ZenithAutomation*, ZenithParamId,
+                                              ZenithLaneState* out_state);
+ZenithStatusCode zenith_automation_lane_set_enabled(ZenithAutomation*, ZenithParamId,
+                                                    uint32_t enabled);
+ZenithStatusCode zenith_automation_lane_set_armed(ZenithAutomation*, ZenithParamId,
+                                                  uint32_t armed);
+ZenithStatusCode zenith_automation_lane_set_collapsed(ZenithAutomation*, ZenithParamId,
+                                                      uint32_t collapsed);
+
+ZenithStatusCode zenith_automation_clip_point_count(const ZenithAutomation*,
+                                                    ZenithParamId, size_t* out_count);
+ZenithStatusCode zenith_automation_clip_get_points(const ZenithAutomation*, ZenithParamId,
+                                                   ZenithAutomationPoint* out_points,
+                                                   size_t capacity, size_t* out_count);
+ZenithStatusCode zenith_automation_clip_set_points(ZenithAutomation*, ZenithParamId,
+                                                   const ZenithAutomationPoint* points,
+                                                   size_t count);
+ZenithStatusCode zenith_automation_clip_insert_point(ZenithAutomation*, ZenithParamId,
+                                                     ZenithAutomationPoint);
+ZenithStatusCode zenith_automation_clip_move_point(ZenithAutomation*, ZenithParamId,
+                                                   size_t index, int64_t frame, float value);
+ZenithStatusCode zenith_automation_clip_set_curve(ZenithAutomation*, ZenithParamId,
+                                                  size_t index, uint32_t curve,
+                                                  float tension);
+ZenithStatusCode zenith_automation_clip_remove_point(ZenithAutomation*, ZenithParamId,
+                                                     size_t index);
+ZenithStatusCode zenith_automation_clip_remove_range(ZenithAutomation*, ZenithParamId,
+                                                     int64_t start_frame,
+                                                     int64_t end_frame);
+ZenithStatusCode zenith_automation_clip_clear(ZenithAutomation*, ZenithParamId);
+ZenithStatusCode zenith_automation_total_points(const ZenithAutomation*,
+                                                size_t* out_count);
+```
+
+> **索引失效规则**：`clip_move_point` 等按 `index` 操作的函数，其 `index` 是
+> `clip_get_points` 返回的**有序位置**。拖动导致重排后索引会变化，调用方必须
+> 重新读取后再操作下一个点。这是为了保持热路径免分配而做的取舍，已在
+> `s2-report.md` 中记录。
+
+```c
+/* 求值：**这是 S1 音频回调在块边界调用的唯一入口**（实时安全：零分配、
+   零锁、零 IO）。零分配由 automation::tests 的 watching allocator 强制。 */
+ZenithStatusCode zenith_automation_advance_block(ZenithAutomation*, int64_t frame,
+                                                 uint32_t frames);
+ZenithStatusCode zenith_automation_stats(const ZenithAutomation*,
+                                         ZenithAutomationStats* out_stats);
+
+/* 调制源（控制线程） */
+ZenithStatusCode zenith_automation_modulator_add_lfo(ZenithAutomation*, uint32_t* out_index);
+ZenithStatusCode zenith_automation_modulator_add_envelope(ZenithAutomation*, uint32_t* out_index);
+ZenithStatusCode zenith_automation_lfo_configure(ZenithAutomation*, uint32_t index,
+                                                 uint32_t shape, float rate_hz,
+                                                 float phase_offset, uint32_t trigger);
+ZenithStatusCode zenith_automation_lfo_set_enabled(ZenithAutomation*, uint32_t, uint32_t);
+ZenithStatusCode zenith_automation_lfo_retrigger(ZenithAutomation*, uint32_t index);
+ZenithStatusCode zenith_automation_lfo_connect(ZenithAutomation*, uint32_t index,
+                                               ZenithParamId, float depth);
+ZenithStatusCode zenith_automation_lfo_disconnect(ZenithAutomation*, uint32_t index,
+                                                  ZenithParamId);
+ZenithStatusCode zenith_automation_envelope_configure(ZenithAutomation*, uint32_t index,
+                                                      float attack_s, float decay_s,
+                                                      float sustain, float release_s);
+ZenithStatusCode zenith_automation_envelope_gate(ZenithAutomation*, uint32_t index,
+                                                 uint32_t open);
+ZenithStatusCode zenith_automation_envelope_connect(ZenithAutomation*, uint32_t index,
+                                                    ZenithParamId, float depth);
+
+/* 自动化录制：Touch / Latch / Write（PLAN §3.S2 第 4 条） */
+ZenithStatusCode zenith_automation_recorder_set_enabled(ZenithAutomation*, uint32_t enabled);
+ZenithStatusCode zenith_automation_recorder_on_control_move(
+    ZenithAutomation*, ZenithParamId, float value, int64_t frame,
+    uint32_t touching, uint32_t mode, uint32_t* out_outcome);
+ZenithStatusCode zenith_automation_recorder_finish(ZenithAutomation*, uint32_t* out_committed);
+ZenithStatusCode zenith_automation_recorder_cancel(ZenithAutomation*);
+ZenithStatusCode zenith_automation_recorder_state(const ZenithAutomation*,
+                                                  ZenithRecorderState* out_state);
+
+/* 自检与能力探测（§9.2 结构体镜像校验） */
+size_t zenith_sizeof_param_id(void);
+size_t zenith_sizeof_param_descriptor(void);
+size_t zenith_sizeof_automation_point(void);
+size_t zenith_sizeof_automation_stats(void);
+size_t zenith_sizeof_lane_state(void);
+size_t zenith_sizeof_recorder_state(void);
+float  zenith_smoothing_ms_min(void);
+float  zenith_smoothing_ms_max(void);
+uint32_t zenith_param_flag_mask(void);   /* 本版本认识的 flag 位掩码 */
+```
+
+> **`zenith_effect_describe_params` 未在 S2 落地**：它依赖 S5 的效果槽模型。
+> S2 用 `zenith_automation_list_parameters`（按 owner 过滤）覆盖了同一需求，
+> S5 落地时在其之上加一层按效果槽过滤的封装即可。这是 S5 的第一个任务，
+> 见 `docs/stages/s2-report.md`「交给 S5 的接口」。
+
 
 ### 6.5 DSP 图与效果槽（**[S3]/[S5]**）
 
@@ -551,9 +709,28 @@ cargo test
 | `ZenithEngineConfig` | `ZenithEngineConfig` | **[S0 落地]** |
 | `ZenithEngineStatus` | `ZenithEngineStatus` | [S1] |
 | `ZenithMusicalTime` | `ZenithMusicalTime` | **[S0 落地]**（tick 化基座） |
-| `ZenithParamId` | `ZenithParamId` | [S2] |
-| `ZenithParamDescriptor` | `ZenithParamDescriptor` | [S2] |
+| `ZenithParamId` | `ZenithParamId` | **[S2 落地]**（8 字节） |
+| `ZenithParamDescriptor` | `ZenithParamDescriptor` | **[S2 落地]**（48 字节 / 64 位） |
+| `ZenithAutomationPoint` | `ZenithAutomationPoint` | **[S2 落地]**（24 字节） |
+| `ZenithAutomationStats` | `ZenithAutomationStats` | **[S2 落地]**（28 字节） |
+| `ZenithLaneState` | `ZenithLaneState` | **[S2 落地]**（40 字节） |
+| `ZenithRecorderState` | `ZenithRecorderState` | **[S2 落地]**（28 字节） |
 | `ZenithMeterSnapshot` | `ZenithMeterSnapshot` | [S3] |
+
+**S2 结构体尺寸对照表**（Rust `const` 断言 + Dart 测试双重守卫，§3.4 第 4 条）：
+
+| 类型 | 64 位 | 32 位（wasm） | 备注 |
+|---|---|---|---|
+| `ZenithParamId` | 8 | 8 | 2+2+4，无填充 |
+| `ZenithParamDescriptor` | 48 | 40 | 含两个指针 |
+| `ZenithAutomationPoint` | 24 | 24 | 显式 `_reserved` |
+| `ZenithAutomationStats` | 28 | 28 | 显式 `_reserved` |
+| `ZenithLaneState` | 40 | 40 | 含 `f32 height` |
+| `ZenithRecorderState` | 28 | 28 | 显式 `_reserved` |
+
+> 指针宽度差异只影响 `ZenithParamDescriptor`；含指针的结构体在 Dart 侧
+> 一律用 `sizeOf<>()` 取运行时尺寸而非硬编码，硬编码值只用于测试断言
+> 「两端说的一样」。
 
 ---
 
@@ -588,6 +765,8 @@ cargo test
 | 版本 | 日期 | 变更 | 作者 |
 |---|---|---|---|
 | v1.0 | — | 首次冻结：确立 10 条设计原则、版本策略、类型映射、错误码、所有权模型、函数面清单、线程模型、构建产物、同步验证机制 | S0 契约基线 |
+| v1.0.1 | — | 补充 S0 实际落地状态（仅版本三件套已实现） | S0 |
+| v1.1 | 2026-10-04 | S2 参数与自动化落地：`ABI_VERSION` 0.1.0 → 0.2.0（minor，纯追加）；§6.4 重写为实际契约（45 个 `zenith_automation_*` 函数 + 独立句柄 `ZenithAutomation`）；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警 | Agent-C（S2） |
 
 ---
 
