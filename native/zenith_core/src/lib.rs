@@ -29,6 +29,17 @@ extern crate alloc;
 
 pub mod automation;
 
+/// The built-in effect suite (PLAN §3.S5).
+///
+/// Every processor here implements [`effects::EffectProcessor`], allocates all
+/// of its buffers in `prepare` and is allocation-free in `process`. Effects
+/// read their parameters through the same descriptor tables S2's automation
+/// system publishes, so an effect parameter is automatable for free.
+///
+/// See `docs/COORDINATION.md` C-011 for the registration of this module and
+/// its `ffi/` surface.
+pub mod effects;
+
 /// The C ABI surface: every `#[no_mangle] extern "C"` symbol lives under here,
 /// so the exported set is auditable by reading one directory (ABI principle P1).
 pub mod ffi;
