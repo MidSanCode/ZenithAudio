@@ -71,12 +71,38 @@ mod tests {
     // more useful than a corrupted audio buffer in production.
 
     use core::alloc::{GlobalAlloc, Layout};
-    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::cell::Cell;
 
-    /// Set while the real-time path is under test.
-    static WATCH_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
-    /// Set once an allocation was observed, to avoid re-entering the hook.
-    static ALLOCATION_SEEN: AtomicBool = AtomicBool::new(false);
+    thread_local! {
+        /// Set while the real-time path is under test **on this thread**.
+        ///
+        /// Deliberately thread-local rather than a process-global `AtomicBool`.
+        /// The allocator hook below is process-global (a `GlobalAlloc` cannot be
+        /// per-thread), but the harness runs `#[test]` functions in parallel
+        /// threads. With a shared flag, the negative-control test — which
+        /// *deliberately* allocates while armed to prove the watcher works —
+        /// would race the zero-allocation test and make it fail spuriously.
+        /// That is not a hypothetical: it is exactly how this test was broken.
+        ///
+        /// Scoping the flag to the thread that armed it keeps each test's
+        /// verdict about its own thread, which is what "the audio thread
+        /// allocates nothing" actually means.
+        static WATCH_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
+        /// Set once an allocation was observed, to avoid re-entering the hook.
+        static ALLOCATION_SEEN: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Arms the watcher on the current thread and clears any prior sighting.
+    fn arm_watcher() {
+        ALLOCATION_SEEN.with(|seen| seen.set(false));
+        WATCH_ALLOCATIONS.with(|armed| armed.set(true));
+    }
+
+    /// Disarms the watcher and reports whether it saw an allocation.
+    fn disarm_watcher() -> bool {
+        WATCH_ALLOCATIONS.with(|armed| armed.set(false));
+        ALLOCATION_SEEN.with(Cell::get)
+    }
 
     /// Wraps the system allocator, tripping when armed.
     struct WatchingAllocator;
@@ -85,9 +111,14 @@ mod tests {
     // layout and pointer, so the allocator contract is exactly `System`'s.
     unsafe impl GlobalAlloc for WatchingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            if WATCH_ALLOCATIONS.load(Ordering::Relaxed) {
-                ALLOCATION_SEEN.store(true, Ordering::Relaxed);
-            }
+            // `try_with` rather than `with`: the hook can be reached from
+            // threads whose TLS is already torn down during shutdown, and
+            // panicking inside the allocator would abort the process.
+            let _ = WATCH_ALLOCATIONS.try_with(|armed| {
+                if armed.get() {
+                    let _ = ALLOCATION_SEEN.try_with(|seen| seen.set(true));
+                }
+            });
             unsafe { std::alloc::System.alloc(layout) }
         }
 
@@ -96,9 +127,11 @@ mod tests {
         }
 
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            if WATCH_ALLOCATIONS.load(Ordering::Relaxed) {
-                ALLOCATION_SEEN.store(true, Ordering::Relaxed);
-            }
+            let _ = WATCH_ALLOCATIONS.try_with(|armed| {
+                if armed.get() {
+                    let _ = ALLOCATION_SEEN.try_with(|seen| seen.set(true));
+                }
+            });
             unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
         }
     }
@@ -203,8 +236,7 @@ mod tests {
         );
 
         // Now the steady state must be allocation-free.
-        ALLOCATION_SEEN.store(false, Ordering::Relaxed);
-        WATCH_ALLOCATIONS.store(true, Ordering::Relaxed);
+        arm_watcher();
 
         let mut frame = 256_i64;
         for _ in 0..600 {
@@ -212,9 +244,9 @@ mod tests {
             frame += 256;
         }
 
-        WATCH_ALLOCATIONS.store(false, Ordering::Relaxed);
+        let allocated = disarm_watcher();
         assert!(
-            !ALLOCATION_SEEN.load(Ordering::Relaxed),
+            !allocated,
             "advance_block allocated during steady-state evaluation — this is a \
              real-time safety violation (P5)"
         );
@@ -225,13 +257,16 @@ mod tests {
         // Sanity check that the watcher actually works: a deliberately
         // allocating operation must trip it. Without this, a broken watcher
         // would make the test above pass vacuously.
-        ALLOCATION_SEEN.store(false, Ordering::Relaxed);
-        WATCH_ALLOCATIONS.store(true, Ordering::Relaxed);
+        //
+        // The watcher is thread-local (see `WATCH_ALLOCATIONS`), so this test
+        // and the zero-allocation test give independent verdicts even when the
+        // harness runs them concurrently.
+        arm_watcher();
         let mut clip = AutomationClip::new();
         clip.insert(AutomationPoint::new(0, 1.0));
-        WATCH_ALLOCATIONS.store(false, Ordering::Relaxed);
+        let allocated = disarm_watcher();
         assert!(
-            ALLOCATION_SEEN.load(Ordering::Relaxed),
+            allocated,
             "the allocation watcher is not detecting allocations"
         );
     }

@@ -201,4 +201,40 @@
 | **回滚方式** | `git revert <S3 各笔提交>`。S3 代码全部位于 `src/mixer/**`、`src/ffi/mixer_api.rs`、`lib/mixer/**`、`lib/widgets/mixer/**`；`types.rs` 与 `mod.rs` 的改动是**纯追加**，可单独回退 S3 段而不影响 S2。 |
 | **状态** | 🟡 Rust 侧已生效；Dart 侧待取得分析/测试结论 |
 
+---
+
+### C-011 · ABI 新增 S5 内置效果器导出面（minor +1）+ 注册 `effects/**` 所有权
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-05 |
+| **登记人** | Agent-C（S5 内置效果器套件） |
+| **变更（自有目录，无需登记，仅备查）** | 新增 `native/zenith_core/src/effects/**`（`mod` / `registry` / `buffer` / `eq/*` / `dynamics/*` / `reverb/*` / `delay/*` / `modulation/*` / `distortion/*` / `filter/*` / `util/*`）。该目录按本文档开头「非共享」定义本属 Agent-C 自有，此处列出仅为明确边界：**Agent-C 不改动 `src/mixer/**`（Agent-D）、`src/engine|driver|transport|voice|dsp/**`（Agent-A）**。 |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/effect_api.rs`（`zenith_effect_*` 系列）；② `src/ffi/mod.rs` **追加一行** `pub mod effect_api;`（不改动 `param_api` / `mixer_api` / `types` 既有行）；③ `src/ffi/types.rs` **末尾追加** `// ── S5 effects ──` 段（`ZenithEffectDescriptor` / `ZenithEffectKindInfo` 等 + 尺寸常量），S0/S1/S2/S3 段**一字未改**；④ `src/lib.rs` 增加 `pub mod effects;` 并把 `ABI_VERSION` 由 `0.3.0` 升至 **`0.4.0`**。 |
+| **ABI 依据** | 遵循 C-010 末尾对 Agent-C 的明确交代：「若你后续再追加导出请用 `0.4.0`」。与 S2/S3 同一依据（`docs/ABI.md` §2.2）：**纯新增**导出函数与**纯追加**结构体，无既有签名/字段序/枚举判别值改动，属向后兼容的 minor 递增。 |
+| **新增导出函数** | `zenith_effect_count` / `zenith_effect_kind_at` / `zenith_effect_describe(kind)` / `zenith_effect_parameter_count(kind)` / `zenith_effect_describe_parameter(kind, index, out)` / `zenith_effect_name(kind)` / `zenith_effect_category(kind)` / `zenith_effect_latency_samples(kind, sample_rate, max_block)` / `zenith_effect_is_known(kind)` / `zenith_sizeof_effect_descriptor` / `zenith_effect_kind_base` / `zenith_effect_kind_plugin_base`。 |
+| **为何需要** | 兑现 `docs/ABI.md` §6.4 留下的欠账：**`zenith_effect_describe_params` 未在 S2 落地**（依赖 S5 效果槽模型）。S5 提供后，Dart 侧效果器 UI 可由描述符**自动生成**，无需为每个效果手写 Dart 类（PLAN §3.S5「UI 自动生成」、ABI §10 第 3 条）。 |
+| **effect_kind ID 空间** | 遵循 ABI §11 Q2 的既定划分：**内置 `0x0000_0000..=0x0000_FFFF`**，插件 `0x0001_0000+`。S5 只占用内置区，并与 `src/mixer/effect_chain.rs` 的 `EffectSlot::kind: Option<u32>` 对齐——混合器只存 kind，不依赖具体效果被编译进来。 |
+| **与 S2 的关系** | 效果参数用 `ParameterKind::Effect`（判别值 3，**已冻结**）注册，槽索引复用 `ParameterAddress::effect(channel, slot, sub)` 的「通道高 24 位 / 槽低 8 位」打包。S5 **不新增寻址方式**，也不改动 S2 的求值顺序；效果参数因此**自动获得**自动化与调制能力（PLAN §3.S5 第 2 条）。 |
+| **影响面** | Agent-A（S1）：引擎接线时可在块边界依 `effect_chain` 的 `processing()` 顺序调用效果；`latency_samples()` 供 S4 的 PDC。Agent-D（S3）：混合器的效果槽现在有了可解析的 kind 语义（解析函数在 `effects::registry`），`effect_chain.rs` **无需改动**。Dart 侧 `lib/native/zenith_core.dart` 的 `kExpectedAbiVersion` 需同步为 `0x000400`。 |
+| **回滚方式** | `git revert <S5 各笔提交>`。S5 代码全部位于 `src/effects/**`、`src/ffi/effect_api.rs`、`lib/effects/**`、`lib/widgets/effects/**`；`types.rs` 与 `mod.rs` 的改动是**纯追加**，可单独回退 S5 段而不影响 S2/S3。 |
+| **状态** | 🟡 进行中 |
+
+---
+
+### C-012 · 修复 S2 零分配断言测试的跨测试干扰（`automation/mod.rs`）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-05 |
+| **登记人** | Agent-C |
+| **变更** | `src/automation/mod.rs` 测试模块：把分配看门狗的两个标志从**进程级 `AtomicBool`** 改为**线程局部 `Cell<bool>`**（`thread_local!`），并抽出 `arm_watcher()` / `disarm_watcher()` 两个辅助函数供两处测试使用。**不改动任何产品代码路径。** |
+| **实测缺陷** | `cargo test --lib` 默认并行时 **1 项失败**：`automation::tests::advance_block_does_not_allocate` 报「advance_block allocated during steady-state evaluation」。此前 C-007 / C-008 记录过同一失败项，并被当作「产品缺陷」排查。 |
+| **真实根因** | **不是**产品缺陷，是**测试隔离缺陷**。`#[global_allocator]` 的钩子必须是进程级的，但其「是否armed」标志当时也是进程级 `AtomicBool`；而测试 harness **并行**运行 `#[test]`。同一模块内的**反向测试** `mutating_lanes_while_playing_is_not_required_to_be_allocation_free` **故意在 armed 状态下分配**，于是它把全局标志点着，正在并行的零分配测试读到了**别人的**分配，误判为实时路径违约。 |
+| **证据** | `cargo test --lib` → **315 passed / 1 failed**；`cargo test --lib -- --test-threads=1` → **316 passed / 0 failed**；单跑该测试 → **通过**。三者对照即定位为并行干扰。修复后并行默认配置下 **316 passed / 0 failed**。 |
+| **为何值得登记** | 这个失败**方向是危险的**：它不是说「测试太严」，而是让一条**真实的安全保证**（PLAN §3.S2「求值路径零分配」、ABI P5）在 CI 上长期红着，久而久之会被当作「已知 flaky」而忽略——那么真正的分配回归就再也拦不住了。改为线程局部后，每条测试只对自己线程的分配作判断，这正是「音频线程不分配」的本义。同时**保留了反向测试**：一个坏掉的看门狗仍会被它抓出来，零分配测试不会变成空转。 |
+| **影响面** | 仅测试代码，无 ABI 改动、无产品行为改动。 |
+| **回滚方式** | `git revert` 对应提交。 |
+| **状态** | 🟢 已生效 |
+
 
