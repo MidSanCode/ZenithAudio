@@ -727,15 +727,20 @@ mod tests {
         // A null fat pointer cannot be written as `ptr::null()` (the vtable
         // half cannot be inferred), transmuted from a thin pointer (the sizes
         // differ), or built with `zeroed()` (a null vtable is an invalid value
-        // and panics under debug assertions). The only sound way to produce
-        // one is to start from `None`, which this helper does for the test.
+        // and panics under debug assertions).
         //
-        // This matches what a C caller passing NULL produces, which is the
-        // case that has to be covered.
-        fn null_processor() -> *const dyn EffectProcessor {
-            None::<*const dyn EffectProcessor>.unwrap_or_else(|| unreachable!())
-        }
-        let null = null_processor();
+        // Recovering one instead: `None` *is* an all-zero fat pointer, and
+        // `Option<*const T>` is guaranteed to share the pointer's
+        // representation, so copying the bytes of a `None` back out as the raw
+        // pointer is the supported construction. This is exactly what a C
+        // caller passing NULL produces, which is the case to cover.
+        let slot: Option<*const dyn EffectProcessor> = None;
+        // SAFETY: `Option<*const dyn T>` has the same layout as `*const dyn T`
+        // here, because a null pointer is `None`; the standard library
+        // guarantees this for pointer types, and a null pointer is valid for
+        // every check the two functions under test perform.
+        let null: *const dyn EffectProcessor = unsafe { core::mem::transmute_copy(&slot) };
+        assert!(null.is_null(), "the recovered pointer must be null");
         assert_eq!(zenith_effect_instance_parameter_count(null), 0);
 
         let mut mirror = impossible_param_descriptor();

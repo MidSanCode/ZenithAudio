@@ -193,7 +193,7 @@ pub extern "C" fn zenith_version_match(expected: u32) -> u32 {
 }
 
 /// Returns a NUL-terminated, statically allocated human-readable version
-/// string, e.g. `"0.3.0"`.
+/// string, e.g. `"0.4.0"`.
 ///
 /// The pointer is valid for the entire lifetime of the process and must not be
 /// freed by the caller.
@@ -209,7 +209,7 @@ pub extern "C" fn zenith_version_string() -> *const c_char {
     //
     // This must be kept in step with `ABI_VERSION`; a test asserts the two
     // agree, because a stale string is how "rebuilt but old library" hides.
-    concat!("0.3.0", "\0").as_ptr() as *const c_char
+    concat!("0.4.0", "\0").as_ptr() as *const c_char
 }
 
 /// Panics on purpose to prove the panic firewall works.
@@ -260,16 +260,17 @@ mod tests {
     fn version_string_round_trips_through_c_str() {
         // SAFETY: the function returns a 'static NUL-terminated literal.
         let s = unsafe { CStr::from_ptr(zenith_version_string()) };
-        assert_eq!(s.to_str().unwrap(), "0.3.0");
+        assert_eq!(s.to_str().unwrap(), "0.4.0");
     }
 
     #[test]
     fn abi_version_encodes_the_expected_release() {
         // Pinned deliberately: a version bump must be a conscious edit here so
         // that adding ABI surface cannot silently ship under the old stamp.
-        // 0.1.0 = S0/S1 skeleton, 0.2.0 = S2 parameters, 0.3.0 = S3 mixer.
+        // 0.1.0 = S0/S1 skeleton, 0.2.0 = S2 parameters, 0.3.0 = S3 mixer,
+        // 0.4.0 = S5 effect query surface.
         assert_eq!(ABI_VERSION >> 16, 0, "major");
-        assert_eq!((ABI_VERSION >> 8) & 0xFF, 3, "minor");
+        assert_eq!((ABI_VERSION >> 8) & 0xFF, 4, "minor");
         assert_eq!(ABI_VERSION & 0xFF, 0, "patch");
     }
 

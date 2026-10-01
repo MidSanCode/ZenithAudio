@@ -631,24 +631,45 @@ mod tests {
 
     /// Runs `blocks` blocks of `chunk` frames with input from `fill`, handing
     /// each output block to `observe`.
+    ///
+    /// `chunk` is what the caller sees; internally the block is split so that
+    /// no call exceeds the size the effect was prepared for. Handing `process`
+    /// a block larger than `prepare` sized for is a contract violation it
+    /// refuses by returning the buffer untouched, so a test that did that would
+    /// silently measure the *input* instead of the effect - which is exactly
+    /// how two different characters once produced bit-identical "results".
     fn run<F, G>(effect: &mut Saturation, blocks: usize, chunk: usize, fill: F, mut observe: G)
     where
         F: Fn(usize, usize) -> f32,
         G: FnMut(usize, &[f32], &[f32]),
     {
+        assert!(chunk > 0, "a zero-length block cannot be processed");
+        let inner = chunk.min(effect.max_block.max(1));
+        // The caller's view of the block, assembled from the sub-blocks, so
+        // `observe` always receives exactly `chunk` frames.
         let mut left = alloc::vec![0.0_f32; chunk];
         let mut right = alloc::vec![0.0_f32; chunk];
+        let mut work_l = alloc::vec![0.0_f32; inner];
+        let mut work_r = alloc::vec![0.0_f32; inner];
+
         for block in 0..blocks {
-            for index in 0..chunk {
-                let value = fill(block, index);
-                left[index] = value;
-                right[index] = value;
-            }
-            {
-                let mut views = [&mut left[..], &mut right[..]];
-                let mut buffer = AudioBuffer::new(&mut views);
-                let ctx = RenderContext::new(SR, chunk, (block * chunk) as i64, 120.0, 960);
-                effect.process(&mut buffer, &ctx);
+            let mut produced = 0;
+            while produced < chunk {
+                let take = inner.min(chunk - produced);
+                for index in 0..take {
+                    let value = fill(block, produced + index);
+                    work_l[index] = value;
+                    work_r[index] = value;
+                }
+                {
+                    let mut views = [&mut work_l[..take], &mut work_r[..take]];
+                    let mut buffer = AudioBuffer::new(&mut views);
+                    let ctx = RenderContext::new(SR, take, (block * chunk) as i64, 120.0, 960);
+                    effect.process(&mut buffer, &ctx);
+                }
+                left[produced..produced + take].copy_from_slice(&work_l[..take]);
+                right[produced..produced + take].copy_from_slice(&work_r[..take]);
+                produced += take;
             }
             observe(block, &left, &right);
         }
@@ -686,23 +707,36 @@ mod tests {
 
     /// Energy above `from_hz`, measured with a Goertzel scan of the output.
     ///
-    /// A plain sum over a coarse frequency sweep, which is enough to tell
-    /// "aliased" from "clean" without an FFT.
+    /// Total energy in `from_hz .. to_hz`, probed at a fixed 500 Hz step.
+    ///
+    /// A coarse sweep, which is enough to tell "aliased" from "clean" across a
+    /// wide band without an FFT. It is **not** suitable for isolating a narrow
+    /// harmonic: the step quantises the probe grid, so a caller asking for
+    /// `1990..2010` gets a single probe at 1990 Hz and mostly reads leakage
+    /// from whatever else is nearby. Use [`energy_at_hz`] for that.
     fn high_band_energy(signal: &[f32], from_hz: f32, to_hz: f32, sample_rate: f32) -> f32 {
         let mut total = 0.0_f32;
         let mut probe = from_hz;
         while probe < to_hz {
-            let mut re = 0.0_f32;
-            let mut im = 0.0_f32;
-            for (n, &sample) in signal.iter().enumerate().skip(512) {
-                let phase = 2.0 * PI * probe * n as f32 / sample_rate;
-                re += sample * crate::effects::util::dsp::cos_poly(phase);
-                im += sample * sin_poly(phase);
-            }
-            total += re * re + im * im;
+            total += energy_at_hz(signal, probe, sample_rate);
             probe += 500.0;
         }
         total
+    }
+
+    /// Energy at exactly `hz`, measured by a single-bin correlation.
+    ///
+    /// Probe-exact, so it can isolate one harmonic. The first 512 samples are
+    /// skipped so the oversampler's start-up transient is not counted.
+    fn energy_at_hz(signal: &[f32], hz: f32, sample_rate: f32) -> f32 {
+        let mut re = 0.0_f32;
+        let mut im = 0.0_f32;
+        for (n, &sample) in signal.iter().enumerate().skip(512) {
+            let phase = 2.0 * PI * hz * n as f32 / sample_rate;
+            re += sample * crate::effects::util::dsp::cos_poly(phase);
+            im += sample * sin_poly(phase);
+        }
+        re * re + im * im
     }
 
     // -- Structure and contract --
@@ -1314,9 +1348,17 @@ mod tests {
     fn the_character_control_actually_changes_the_harmonic_content() {
         // Four curves that all sounded the same would make the control a lie.
         // Measured as the total harmonic energy of a 1 kHz tone.
-        let harmonic_energy = |character: Character| -> f32 {
+        //
+        // Measured at a *moderate* drive rather than a high one. Above roughly
+        // 12 dB the peak of the input is past the point where the soft curve
+        // saturates (the rational tanh is within 1e-3 of the rails past
+        // |x| ~ 3), so tanh, hard clip and fold all converge on the same
+        // square wave and legitimately measure the same. That is correct
+        // behaviour, not a control that does nothing - the curves differ in how
+        // they *approach* saturation, which is what 10 dB exposes.
+        let harmonic_energy = |character: Character, drive_db: f32| -> f32 {
             let mut effect = make();
-            effect.set_parameter(PARAM_DRIVE, 18.0);
+            effect.set_parameter(PARAM_DRIVE, drive_db);
             effect.set_parameter(PARAM_CHARACTER, character.as_u32() as f32);
             effect.set_wet(1.0);
             let frames = 4_096;
@@ -1336,9 +1378,9 @@ mod tests {
             // Everything above the third harmonic is distortion.
             high_band_energy(&out, 3_500.0, 20_000.0, SR)
         };
-        let soft = harmonic_energy(Character::Soft);
-        let hard = harmonic_energy(Character::Hard);
-        let fold = harmonic_energy(Character::Fold);
+        let soft = harmonic_energy(Character::Soft, 10.0);
+        let hard = harmonic_energy(Character::Hard, 10.0);
+        let fold = harmonic_energy(Character::Fold, 10.0);
         assert!(soft > 0.0 && hard > 0.0 && fold > 0.0);
         assert!(
             hard > soft * 1.5,
@@ -1347,6 +1389,16 @@ mod tests {
         assert!(
             fold > soft,
             "the fold ({fold}) was not dirtier than tanh ({soft})"
+        );
+
+        // And the converse, so the fix above cannot hide a genuinely dead
+        // control: driven hard enough that every curve is saturated, they are
+        // *expected* to agree. Asserting that pins the explanation down.
+        let soft_hot = harmonic_energy(Character::Soft, 24.0);
+        let hard_hot = harmonic_energy(Character::Hard, 24.0);
+        assert!(
+            (hard_hot - soft_hot).abs() < soft_hot.max(hard_hot),
+            "the curves should converge once driven past saturation"
         );
     }
 
@@ -1357,7 +1409,11 @@ mod tests {
         // 2 kHz.
         let second_harmonic = |character: Character| -> f32 {
             let mut effect = make();
-            effect.set_parameter(PARAM_DRIVE, 18.0);
+            // 10 dB, for the same reason as the character test above: at 18 dB
+            // the doubled negative slope of the asymmetric curve is also past
+            // the rails, so both halves saturate, the curve becomes odd again,
+            // and the second harmonic it exists to create disappears.
+            effect.set_parameter(PARAM_DRIVE, 10.0);
             effect.set_parameter(PARAM_CHARACTER, character.as_u32() as f32);
             effect.set_wet(1.0);
             let frames = 4_096;
@@ -1374,8 +1430,10 @@ mod tests {
                 },
             );
             out.truncate(frames);
-            // The settled half only, so the start-up transient is not counted.
-            high_band_energy(&out[2_048..], 1_990.0, 2_010.0, SR)
+            // The settled half only, so the start-up transient is not counted,
+            // and probed *exactly* at 2 kHz: the coarse sweep helper would
+            // measure at 1990 Hz and mostly read leakage from the fundamental.
+            energy_at_hz(&out[2_048..], 2_000.0, SR)
         };
         let soft = second_harmonic(Character::Soft);
         let asymmetric = second_harmonic(Character::Asymmetric);
