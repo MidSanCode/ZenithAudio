@@ -70,3 +70,6 @@ native/**/target/
 .s5-check/
 .scratch/
 .mycheck/
+
+# 会话启动提示词：仅本地使用，不纳入版本库
+docs/prompts/

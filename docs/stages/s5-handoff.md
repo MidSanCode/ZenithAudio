@@ -157,7 +157,7 @@ cargo check --target wasm32-unknown-unknown   # ABI P7
   （交付内容 / 逐条对照验收表 / 门禁证据 / 已知缺口）。
 * `docs/PLAN_DAW_PARITY.md` §6 进度表：`| S5 效果器套件 |` 从 ⬜ 未开始 改为实际状态。
 * `docs/COORDINATION.md` C-011：🟡 进行中 → 🟢 已生效。
-* 删除 `docs/prompts/s5-effect-brief.md`（它自己说明 S5 落地后即可删除）。
+* ~~删除 `docs/prompts/s5-effect-brief.md`~~（**已于交接时删除**，无需再处理）。
 
 ---
 
