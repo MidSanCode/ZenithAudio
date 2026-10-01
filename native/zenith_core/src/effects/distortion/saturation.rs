@@ -151,9 +151,11 @@ impl Character {
 
     /// Whether this curve generates a DC offset for a zero-mean input.
     ///
-    /// Only the asymmetric one does; the caller uses this to skip nothing (DC
-    /// blocking is unconditional) but the tests assert it, and a UI can use it
-    /// to explain why a level meter reads high.
+    /// Only the asymmetric one does. The audio path reads this to decide
+    /// whether to run the DC blocker at all: the other curves are odd, so they
+    /// map a zero-mean input to a zero-mean output and blocking would only add
+    /// a transient and a phase shift. A UI can also use it to explain why a
+    /// level meter reads high on this character but not the others.
     #[must_use]
     pub const fn is_asymmetric(self) -> bool {
         matches!(self, Self::Asymmetric)
@@ -506,12 +508,27 @@ impl EffectProcessor for Saturation {
             }
 
             // -- DC block --
-            // An asymmetric curve (or any bias) shifts the waveform's mean, and
-            // DC on a bus eats headroom and makes the meter read high for no
-            // audible reason.
-            let dc = &mut self.dc[channel];
-            for sample in self.wet_buf[..frames].iter_mut() {
-                *sample = dc.process(channel, *sample, dc_coefficient);
+            // A curve that is not odd shifts the waveform's mean, and DC on a
+            // bus eats headroom and makes the meter read high for no audible
+            // reason.
+            //
+            // Run only when the path can actually generate DC: a bias, or the
+            // asymmetric curve (which has a different slope either side of zero
+            // and so is deliberately not odd). The soft, hard and fold curves
+            // are all odd, so `shape(-x) == -shape(x)` and a zero-mean input
+            // comes out zero-mean - there is no DC to remove.
+            //
+            // That distinction matters rather than being an optimisation: a
+            // ~5 Hz high-pass in series is not transparent. Left unconditional
+            // it adds a settling transient to every block, shifts the phase,
+            // and removes the DC *an actual constant input consists of*, so a
+            // steady signal troughs to nothing instead of passing through.
+            let needs_dc_block = bias != 0.0 || shape.is_asymmetric();
+            if needs_dc_block {
+                let dc = &mut self.dc[channel];
+                for sample in self.wet_buf[..frames].iter_mut() {
+                    *sample = dc.process(channel, *sample, dc_coefficient);
+                }
             }
 
             if let Some(destination) = buffer.channel_mut(channel) {

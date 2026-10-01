@@ -1147,16 +1147,18 @@ mod tests {
             });
             let sum: f32 = out[..frames].iter().sum();
             let offset = sum / frames as f32;
-            // A 2-bit lattice has four steps across full scale, so a 300 Hz
-            // sine at 0.8 amplitude spends long stretches on one level. The
-            // DC blocker's one-pole settling on a signal that coarse leaves a
-            // residual well above the other depths', and that residual is the
-            // blocker's, not an unbounded offset: it is bounded by one step and
-            // it is under a hundredth for every depth.
+            // What the blocker guarantees is that the offset is bounded by a
+            // small fraction of one lattice step, not that it vanishes. A
+            // one-pole at 5 Hz has a finite settling time, and a coarse lattice
+            // gives it a chunky signal to settle on, so the residual at 2 bits
+            // is inherently the largest of the four. The bound is one twentieth
+            // of a step, which still fails loudly if the blocker is ever
+            // bypassed: an unblocked mid-tread lattice leaves a full step.
             let step = 1.0 / (powf(2.0, bits - 1.0) - 1.0).max(1.0);
             assert!(
-                offset.abs() < (step * 0.05).max(2e-3),
-                "{bits}-bit quantisation of a bipolar signal left an offset of {offset}"
+                offset.abs() < step * 0.05,
+                "{bits}-bit quantisation of a bipolar signal left an offset of {offset}, \
+                 which is more than a twentieth of the {step} step"
             );
         }
         // The quantiser itself is odd, which is the property that makes the
@@ -1389,7 +1391,7 @@ mod tests {
         // builds the two candidate orders locally and asks the effect which one
         // it agrees with, using a signal that distinguishes them.
         let drive_db = 18.0_f32;
-        let bits = 3.0_f32;
+        let bits = 2.0_f32;
         let rate = 6_000.0_f32; // hold of 8
         let mut effect = make();
         effect.set_parameter(PARAM_DRIVE, drive_db);
@@ -1397,10 +1399,17 @@ mod tests {
         effect.set_parameter(PARAM_RATE, rate);
         effect.set_parameter(PARAM_DITHER, 0.0);
         effect.set_wet(1.0);
+        settle(&mut effect);
 
         let frames = 256;
+        // A signal that moves *fast* relative to the hold window, which is what
+        // makes the two orders distinguishable. A slow sine would quantise to
+        // the same code at every sample of a hold either way, so both candidate
+        // orders would produce identical output and the test could not tell
+        // them apart. Alternating samples a step apart guarantees the code
+        // changes across the window.
         let input: alloc::vec::Vec<f32> = (0..frames)
-            .map(|n| sin_poly(2.0 * PI * 300.0 * n as f32 / SR) * 0.6)
+            .map(|n| if n % 2 == 0 { 0.45 } else { -0.45 })
             .collect();
         let out = capture(&mut effect, 1, frames, |_, index| input[index]);
 
@@ -1440,21 +1449,28 @@ mod tests {
             wrong[index] = quantize(held_input * gain, bits) * comp;
         }
 
-        // The DC blocker attenuates the held staircase's low-frequency content,
-        // so compare after both candidates are given the same treatment: the
-        // shape is what distinguishes the orders, and the effect's own output
-        // is high-passed. Compare on the first few holds, before the DC
-        // blocker's settling dominates.
-        let window = 8 * hold;
-        let distance = |a: &[f32], b: &[f32]| -> f32 {
-            let mut worst = 0.0_f32;
-            for index in 0..window {
-                worst = worst.max((a[index] - b[index]).abs());
-            }
-            worst
-        };
-        let to_expected = distance(&out, &expected);
-        let to_wrong = distance(&out, &wrong);
+        // Both candidates are compared after the same treatment as the effect's
+        // own output, and only where they actually differ - the two orders
+        // coincide on every sample inside a hold by construction, so measuring
+        // only the hold boundaries is what isolates the distinction.
+        let boundary: alloc::vec::Vec<usize> =
+            (0..frames).filter(|index| index % hold == 0).collect();
+        let mut to_expected = 0.0_f32;
+        let mut to_wrong = 0.0_f32;
+        for &index in &boundary {
+            to_expected = to_expected.max((out[index] - expected[index]).abs());
+            to_wrong = to_wrong.max((out[index] - wrong[index]).abs());
+        }
+        // The candidates must genuinely differ, or this test proves nothing.
+        let mut divergence = 0.0_f32;
+        for &index in &boundary {
+            divergence = divergence.max((expected[index] - wrong[index]).abs());
+        }
+        assert!(
+            divergence > 1e-3,
+            "the two candidate orders produced the same output ({divergence} apart), \
+             so this signal cannot distinguish them"
+        );
         assert!(
             to_expected < to_wrong,
             "the effect matches the hold-then-quantise order ({to_wrong}) better than \
