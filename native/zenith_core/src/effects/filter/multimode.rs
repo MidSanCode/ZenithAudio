@@ -731,7 +731,7 @@ mod tests {
             {
                 let mut views = [&mut channel[..]];
                 let mut buf = AudioBuffer::new(&mut views);
-                let ctx = RenderContext::new(SR, chunk, round * chunk, 120.0, 960);
+                let ctx = RenderContext::new(SR, chunk, (round * chunk) as i64, 120.0, 960);
                 effect.process(&mut buf, &ctx);
             }
             for (i, sample) in channel.iter().enumerate() {
@@ -761,7 +761,7 @@ mod tests {
             {
                 let mut views = [&mut channel[..]];
                 let mut buf = AudioBuffer::new(&mut views);
-                let ctx = RenderContext::new(SR, chunk, round * chunk, 120.0, 960);
+                let ctx = RenderContext::new(SR, chunk, (round * chunk) as i64, 120.0, 960);
                 effect.process(&mut buf, &ctx);
             }
             for sample in &channel {

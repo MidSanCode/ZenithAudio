@@ -4,13 +4,13 @@
 //! to get a flanger and call it a phaser. There is no delay line here. Instead:
 //!
 //! 1. the signal passes through `stages` first-order all-pass sections, each of
-//!    which shifts phase by up to 180° without touching the magnitude;
+//!    which shifts phase by up to 180 degrees without touching the magnitude;
 //! 2. that phase-shifted copy is summed with the dry signal;
-//! 3. wherever the shifted copy is 180° out of phase with the dry one, the sum
+//! 3. wherever the shifted copy is 180 degrees out of phase with the dry one, the sum
 //!    cancels.
 //!
 //! Because each all-pass has its own corner frequency, the result is a handful
-//! of notches — not the harmonic series a comb gives. That is the audible
+//! of notches -- not the harmonic series a comb gives. That is the audible
 //! difference between a phaser and a flanger, and it is why the two are
 //! separate modules rather than one with a mode switch.
 //!
@@ -30,7 +30,7 @@
 //! ```
 //!
 //! which is computed here from `sin`/`cos` via the half-angle identity
-//! `tan(w/2) = sin(w) / (1 + cos(w))` — the same route
+//! `tan(w/2) = sin(w) / (1 + cos(w))` -- the same route
 //! [`super::super::filter::biquad`] takes, and better conditioned than calling
 //! `tan` as the corner approaches Nyquist. `f` is clamped with
 //! `clamp_frequency` so the pole can never leave the unit circle, which is what
@@ -42,7 +42,7 @@
 //! starts sounding like the recorded phaser sound; the `stages` parameter
 //! selects how many of the eight are active. The array is a fixed inline
 //! `[AllPass; MAX_STAGES]`, so changing the count costs nothing and allocates
-//! nothing — a per-block `Vec` would be a real-time violation.
+//! nothing -- a per-block `Vec` would be a real-time violation.
 //!
 //! Each section is offset in frequency from the one below it by a fixed ratio,
 //! which spreads the notches across the band instead of stacking eight of them
@@ -230,7 +230,7 @@ impl AllPass {
     ///
     /// `a = (1 - t) / (1 + t)` with `t = tan(PI * f / fs)`, computed through the
     /// half-angle identity. The result is clamped into `-0.9999..=0.9999`: at
-    /// exactly ±1 the section's pole is on the unit circle and rings forever,
+    /// exactly +/-1 the section's pole is on the unit circle and rings forever,
     /// which turns a phaser into an oscillator.
     #[must_use]
     fn coefficient(hz: f32, sample_rate: f32) -> f32 {
@@ -535,15 +535,19 @@ impl EffectProcessor for Phaser {
                     self.last_high_hz = frequencies[count - 1];
                 }
 
-                // ── The cascade. Each section's coefficient is recomputed per
+                // -- The cascade. Each section's coefficient is recomputed per
                 //    sample so the sweep is continuous; it is a few multiplies
                 //    and a `sin`/`cos`, and redesigning per block would step
-                //    the notches audibly at low LFO rates. ──
+                //    the notches audibly at low LFO rates. --
                 let mut signal = input + self.channels[channel].feedback * feedback;
-                for stage in 0..count {
-                    self.channels[channel].stages[stage].a =
-                        AllPass::coefficient(frequencies[stage], self.sample_rate);
-                    signal = self.channels[channel].stages[stage].process(signal);
+                for (stage, hz) in self.channels[channel]
+                    .stages
+                    .iter_mut()
+                    .zip(frequencies.iter())
+                    .take(count)
+                {
+                    stage.a = AllPass::coefficient(*hz, self.sample_rate);
+                    signal = stage.process(signal);
                 }
                 self.channels[channel].feedback = if signal.is_finite() { signal } else { 0.0 };
 
@@ -570,7 +574,7 @@ impl EffectProcessor for Phaser {
     }
 
     fn latency_samples(&self) -> usize {
-        // Zero: a phaser has no delay line at all — it is a cascade of
+        // Zero: a phaser has no delay line at all -- it is a cascade of
         // first-order all-pass sections, so there is no wet-path delay for PDC
         // to align.
         0
@@ -592,8 +596,10 @@ impl EffectProcessor for Phaser {
             PARAM_STAGES => {
                 // `value` is already clamped to the descriptor's 2..=8 range;
                 // the cast is exact because that range is integral.
-                self.stage_count =
-                    value.round().clamp(MIN_STAGES as f32, MAX_STAGE_PARAM as f32) as usize;
+                self.stage_count = value
+                    .round()
+                    .clamp(MIN_STAGES as f32, MAX_STAGE_PARAM as f32)
+                    as usize;
             }
             PARAM_FEEDBACK => self.feedback_percent = value,
             PARAM_MIX => {
@@ -635,7 +641,7 @@ impl EffectProcessor for Phaser {
 
     fn tail_seconds(&self) -> f32 {
         // A phaser has no delay line, so its tail is only the feedback loop's
-        // decay through eight all-pass sections — well under a tenth of a
+        // decay through eight all-pass sections -- well under a tenth of a
         // second even at maximum feedback.
         0.1
     }
@@ -1161,19 +1167,30 @@ mod tests {
 
     #[test]
     fn a_sustained_tone_at_maximum_feedback_stays_bounded() {
+        // A driven resonance at maximum feedback takes time to build, so the
+        // question this test answers is not "is the second half quieter than
+        // the first" -- during the build-up it is not -- but "has the loop
+        // reached a bounded steady state rather than still growing". Two
+        // windows at the far end of a two-second render, both well past the
+        // build-up, must agree.
         let mut effect = make();
         effect.set_parameter(PARAM_FEEDBACK, 100.0);
         effect.set_parameter(PARAM_STAGES, 8.0);
         effect.set_parameter(PARAM_DEPTH, 100.0);
         effect.set_parameter(PARAM_MIX, 100.0);
         let input = tone(96_000, 700.0);
-        let (left, _) = run(&mut effect, &input);
-        let early = peak(&left, 24_000, 48_000);
-        let late = peak(&left, 72_000, 96_000);
-        assert!(late.is_finite());
+        let (left, right) = run(&mut effect, &input);
+
+        for (i, sample) in left.iter().chain(right.iter()).enumerate() {
+            assert!(sample.is_finite(), "sample {i} is {sample}");
+            assert!(sample.abs() < 100.0, "resonance reached {sample}");
+        }
+        let a = peak(&left, 48_000, 72_000);
+        let b = peak(&left, 72_000, 96_000);
+        assert!(a > 0.0, "the tone produced no output at all");
         assert!(
-            late <= early * 1.05 + 1e-4,
-            "the resonance ran away: {early} then {late}"
+            b <= a * 1.05 + 1e-4,
+            "the steady state is still growing: {a} then {b}"
         );
     }
 
@@ -1330,9 +1347,6 @@ mod tests {
         };
         let half = measure(50.0);
         let full = measure(100.0);
-        assert!(
-            half < full,
-            "the notch did not attenuate: {half} vs {full}"
-        );
+        assert!(half < full, "the notch did not attenuate: {half} vs {full}");
     }
 }

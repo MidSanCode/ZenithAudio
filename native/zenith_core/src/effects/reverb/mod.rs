@@ -22,8 +22,8 @@
 //! Both effects size every delay line and every FFT scratch region in
 //! `prepare` and allocate nothing in `process` (see
 //! [`crate::effects::EffectProcessor`]). A reverb is the effect most likely to
-//! break that rule, because its natural implementation — "keep the last N
-//! seconds of audio" — is a growing buffer if it is written carelessly.
+//! break that rule, because its natural implementation - "keep the last N
+//! seconds of audio" - is a growing buffer if it is written carelessly.
 
 pub mod algorithmic;
 pub mod convolution;

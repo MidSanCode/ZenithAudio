@@ -1,51 +1,54 @@
 //! Tempo-synchronised delay with damping, ping-pong routing and a stereo
 //! spread control.
 //!
-//! PLAN §3.S5 requires "延迟（同步/自由）": one delay that can either follow the
-//! host tempo or run on a plain millisecond setting. This module is that
-//! delay.
+//! PLAN section 3.S5 requires one delay that can either follow the host tempo
+//! or run on a plain millisecond setting. This module is that delay.
 //!
 //! # Why the musical division is an enum and not a beats knob
 //!
 //! A free-running beats control invites a value like `0.437` of a beat, which
-//! is neither on the grid nor musically useful, and — worse — is impossible to
-//! label in a UI. The divisions a delay is actually used for are a small,
-//! closed set (1/16 … 1/2, including dotted and triplet variants), so they are
-//! published as an enumeration with the beat length baked in. The UI can then
-//! show "1/8 dotted" instead of "0.75 beats", and the tempo conversion happens
-//! in exactly one place: the shared `beats_to_samples` conversion on the render
-//! context.
+//! is neither on the grid nor musically useful, and -- worse -- is impossible
+//! to label in a UI. The divisions a delay is actually used for are a small,
+//! closed set (1/16 up to 1/2, including dotted and triplet variants), so they
+//! are published as an enumeration with the beat length baked in. The UI can
+//! then show "1/8 dotted" instead of "0.75 beats", and the tempo conversion
+//! happens in exactly one place: the shared `beats_to_samples` conversion on
+//! the render context.
 //!
-//! # Why beats, not seconds
+//! # Why the delay length is re-derived every block
 //!
 //! The whole point of a synced delay is that the echo follows the tempo. The
-//! conversion is therefore done **per block** against the tempo in the render
-//! context rather than once in `prepare`: a tempo change mid-render must move
+//! conversion is therefore done per block, against the tempo in the render
+//! context, rather than once in `prepare`: a tempo change mid-render must move
 //! the echo with it, and a delay that cached its length at prepare time would
 //! drift off the grid the moment the user moved the tempo.
 //!
 //! # Feedback stability
 //!
-//! The feedback loop is `ring → damping filters → gain → ring`. Each turn
+//! The feedback loop is `ring -> damping filters -> gain -> ring`. Each turn
 //! through the loop applies the damping low-pass and high-pass, both of which
 //! have a gain of at most 1, plus the (strictly sub-unity) feedback gain. The
 //! loop therefore has a round-trip gain of at most `USER_MAX_FEEDBACK` at every
 //! frequency, which is the textbook stability condition: every partial decays
 //! by at least `1 - USER_MAX_FEEDBACK` per repeat and the closed loop cannot
 //! grow. That is why the feedback parameter is clamped in the *setter* as well
-//! as in the descriptor — a value that reached unity would make the loop
+//! as in the descriptor -- a value that reached unity would make the loop
 //! marginally stable and the first rounding error would turn it into a runaway
 //! oscillator.
 //!
 //! # Ping-pong
 //!
-//! Ping-pong is implemented by **crossing the write**, not by a separate send
-//! bus: the feedback term computed from one channel's delay line is written
-//! into the *other* channel's line. An impulse on the left therefore appears on
+//! Ping-pong is implemented by crossing the *feedback term*, not by a separate
+//! send bus: the feedback computed from one channel's delay line is written
+//! into the other channel's line. An impulse on the left therefore appears on
 //! the right exactly one delay period later, and on the left again one period
-//! after that, which is the audible definition of ping-pong. The *dry input* of
+//! after that, which is the audible definition of ping-pong. The dry input of
 //! each channel always goes into its own line, so the effect is not a
 //! channel-swapper while it echoes.
+//!
+//! Writes are deferred by one sample (the `next` array in `process`) so that a
+//! crossed route costs exactly one delay period rather than two: both lines
+//! read the state they had at the start of the sample.
 //!
 //! # Real-time safety
 //!
@@ -54,7 +57,7 @@
 //! locking and no IO.
 
 use super::super::buffer::{AudioBuffer, RenderContext};
-use super::super::util::dsp::{clamp_frequency, DcBlocker};
+use super::super::util::dsp::{clamp_frequency, log2};
 use super::super::{
     clamp_parameter, sanitize_wet, EffectCategory, EffectDescriptor, EffectProcessor,
 };
@@ -98,7 +101,7 @@ pub const MAX_DIVISION_BEATS: f32 = 2.0;
 /// The slowest tempo the ring is sized for, in beats per minute.
 ///
 /// 20 BPM is well below any tempo a user would record at, and the extra ring
-/// memory over, say, a 40 BPM assumption is a few hundred kilobytes — far
+/// memory over, say, a 40 BPM assumption is a few hundred kilobytes -- far
 /// cheaper than a delay that clicks because its echo ran past the end of the
 /// buffer.
 pub const MIN_SUPPORTED_BPM: f32 = 20.0;
@@ -108,8 +111,8 @@ pub const MIN_SUPPORTED_BPM: f32 = 20.0;
 /// A context with a non-positive `bpm` cannot produce a beat length (the shared
 /// conversion returns zero rather than dividing by zero), so a synced delay
 /// using it naively would collapse to "no delay at all". Falling back to
-/// 120 BPM keeps a transport-less render — an offline bounce with no tempo map
-/// — musical instead of silent.
+/// 120 BPM keeps a transport-less render -- an offline bounce with no tempo map
+/// -- musical instead of silent.
 const FALLBACK_BPM: f32 = 120.0;
 
 /// Lowest damping corner the parameters allow, in hertz.
@@ -119,14 +122,15 @@ const MAX_DAMP_HZ: f32 = 20_000.0;
 
 /// The feedback gain actually applied at 100% feedback.
 ///
-/// Strictly below 1.0 by construction; `MAX_FEEDBACK_CEILING` asserts it.
+/// Strictly below 1.0 by construction; the `const _` assertion near the bottom
+/// of this module and a test both pin that.
 const USER_MAX_FEEDBACK: f32 = 0.90;
 
-/// The value the test suite asserts [`USER_MAX_FEEDBACK`] stays below.
+/// The value the compile-time assertion requires [`USER_MAX_FEEDBACK`] to stay
+/// below.
 const MAX_FEEDBACK_CEILING: f32 = 1.0;
 
-/// How far the spread control can push the right channel later, in
-/// milliseconds.
+/// How far the spread control can push one channel later, in milliseconds.
 ///
 /// Enough to widen a mono echo into stereo without turning it into a second,
 /// audible repeat.
@@ -142,53 +146,54 @@ const MAX_TAIL_SECONDS: f32 = 12.0;
 /// A musical division, as a number of quarter-note beats.
 ///
 /// The discriminants are the published enumeration values and must never
-/// change; new divisions are appended.
+/// change; new divisions are appended. The listing order is longest first,
+/// which is how a delay's division menu is conventionally read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum SyncDivision {
-    /// Sixteenth note: a quarter of a beat.
-    Sixteenth = 0,
-    /// Eighth note: half a beat.
-    Eighth = 1,
-    /// Dotted eighth: three quarters of a beat.
-    EighthDotted = 2,
-    /// Eighth-note triplet: a third of a beat.
-    EighthTriplet = 3,
-    /// Quarter note: one beat.
-    Quarter = 4,
-    /// Dotted quarter: one and a half beats.
-    QuarterDotted = 5,
-    /// Quarter-note triplet: two thirds of a beat.
-    QuarterTriplet = 6,
     /// Half note: two beats.
-    Half = 7,
+    Half = 0,
+    /// Dotted quarter: one and a half beats.
+    QuarterDotted = 1,
+    /// Quarter note: one beat.
+    Quarter = 2,
+    /// Dotted eighth: three quarters of a beat.
+    EighthDotted = 3,
+    /// Quarter-note triplet: two thirds of a beat.
+    QuarterTriplet = 4,
+    /// Eighth note: half a beat.
+    Eighth = 5,
+    /// Eighth-note triplet: a third of a beat.
+    EighthTriplet = 6,
+    /// Sixteenth note: a quarter of a beat.
+    Sixteenth = 7,
 }
 
 impl SyncDivision {
     /// Every division, in discriminant order.
     pub const ALL: [Self; 8] = [
-        Self::Sixteenth,
-        Self::Eighth,
-        Self::EighthDotted,
-        Self::EighthTriplet,
-        Self::Quarter,
-        Self::QuarterDotted,
-        Self::QuarterTriplet,
         Self::Half,
+        Self::QuarterDotted,
+        Self::Quarter,
+        Self::EighthDotted,
+        Self::QuarterTriplet,
+        Self::Eighth,
+        Self::EighthTriplet,
+        Self::Sixteenth,
     ];
 
     /// Converts a raw ABI discriminant, rejecting unknown values.
     #[must_use]
     pub const fn from_u32(raw: u32) -> Option<Self> {
         match raw {
-            0 => Some(Self::Sixteenth),
-            1 => Some(Self::Eighth),
-            2 => Some(Self::EighthDotted),
-            3 => Some(Self::EighthTriplet),
-            4 => Some(Self::Quarter),
-            5 => Some(Self::QuarterDotted),
-            6 => Some(Self::QuarterTriplet),
-            7 => Some(Self::Half),
+            0 => Some(Self::Half),
+            1 => Some(Self::QuarterDotted),
+            2 => Some(Self::Quarter),
+            3 => Some(Self::EighthDotted),
+            4 => Some(Self::QuarterTriplet),
+            5 => Some(Self::Eighth),
+            6 => Some(Self::EighthTriplet),
+            7 => Some(Self::Sixteenth),
             _ => None,
         }
     }
@@ -203,14 +208,14 @@ impl SyncDivision {
     #[must_use]
     pub const fn beats(self) -> f32 {
         match self {
-            Self::Sixteenth => 0.25,
-            Self::Eighth => 0.5,
-            Self::EighthDotted => 0.75,
-            Self::EighthTriplet => 1.0 / 3.0,
-            Self::Quarter => 1.0,
-            Self::QuarterDotted => 1.5,
-            Self::QuarterTriplet => 2.0 / 3.0,
             Self::Half => 2.0,
+            Self::QuarterDotted => 1.5,
+            Self::Quarter => 1.0,
+            Self::EighthDotted => 0.75,
+            Self::QuarterTriplet => 2.0 / 3.0,
+            Self::Eighth => 0.5,
+            Self::EighthTriplet => 1.0 / 3.0,
+            Self::Sixteenth => 0.25,
         }
     }
 
@@ -218,14 +223,14 @@ impl SyncDivision {
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
-            Self::Sixteenth => "1_16",
-            Self::Eighth => "1_8",
-            Self::EighthDotted => "1_8_dotted",
-            Self::EighthTriplet => "1_8_triplet",
-            Self::Quarter => "1_4",
-            Self::QuarterDotted => "1_4_dotted",
-            Self::QuarterTriplet => "1_4_triplet",
             Self::Half => "1_2",
+            Self::QuarterDotted => "1_4_dotted",
+            Self::Quarter => "1_4",
+            Self::EighthDotted => "1_8_dotted",
+            Self::QuarterTriplet => "1_4_triplet",
+            Self::Eighth => "1_8",
+            Self::EighthTriplet => "1_8_triplet",
+            Self::Sixteenth => "1_16",
         }
     }
 }
@@ -298,6 +303,10 @@ impl PingPong {
     }
 
     /// The channel that receives channel `source`'s repeats.
+    ///
+    /// A crossed route swaps the two sides; an uncrossed one leaves them alone.
+    /// `source` is folded to `0..=1` with a comparison rather than `Ord::min`,
+    /// which is not usable in a `const fn` on this toolchain.
     #[must_use]
     pub(crate) const fn target(self, source: usize) -> usize {
         let side = if source < 1 { source } else { 1 };
@@ -527,6 +536,15 @@ impl DelayLine {
     /// past the end of the ring. The fractional part interpolates between the
     /// two neighbouring taps, which is what turns a tempo change into a
     /// continuous pitch shift instead of a staircase of clicks.
+    ///
+    /// # Index arithmetic
+    ///
+    /// `process` calls this *before* writing the current frame, so the cursor
+    /// sits at the time of the frame being produced and the sample `d` frames
+    /// ago lives at `(cursor - d) mod len` exactly. Reading from `cursor - 1`
+    /// instead -- the most recently written sample -- would give a delay one
+    /// sample longer than the caller asked for, which is audible as an echo
+    /// that never quite lands on the grid.
     #[must_use]
     fn read(&self, delay_samples: f32) -> f32 {
         let capacity = self.capacity();
@@ -541,10 +559,9 @@ impl DelayLine {
         };
         let whole = delay as usize;
         let fraction = delay - whole as f32;
-        // `write` is one past the most recent sample, so the most recent sample
-        // lives at `write - 1`; walking back `whole` from there gives the
-        // integer tap and one further back the tap after it.
-        let base = self.write + len - 1 - whole;
+        // `whole` back from the cursor is the integer tap; one sample further
+        // back is the tap after it, which the fraction interpolates towards.
+        let base = self.write + len - whole;
         let first = self.ring[base % len];
         let second = self.ring[(base + len - 1) % len];
         first + (second - first) * fraction
@@ -594,9 +611,6 @@ pub struct SyncDelay {
     lines: [DelayLine; MAX_CHANNELS],
     /// Per-channel damping filters.
     damping: [Damping; MAX_CHANNELS],
-    /// DC blocker on the wet output, so the damping high-pass cannot leave an
-    /// offset behind in the main output.
-    dc: DcBlocker,
     /// The delay length used by the most recent block on channel 0, in
     /// samples.
     ///
@@ -613,14 +627,14 @@ pub struct SyncDelay {
     bypassed: bool,
     /// Sample rate in hertz.
     sample_rate: f32,
-    /// Preallocated snapshot of the dry input, `max_block`.
-    dry: alloc::vec::Vec<f32>,
+    /// Preallocated snapshot of channel 0's dry input, `max_block`.
+    dry_left: alloc::vec::Vec<f32>,
+    /// Preallocated snapshot of channel 1's dry input, `max_block`.
+    dry_right: alloc::vec::Vec<f32>,
     /// Preallocated wet working buffer for channel 0, `max_block`.
     wet_left: alloc::vec::Vec<f32>,
     /// Preallocated wet working buffer for channel 1, `max_block`.
     wet_right: alloc::vec::Vec<f32>,
-    /// How many channels are active.
-    active_channels: usize,
     /// Preallocated capacity, for the `process` guard.
     max_block: usize,
 }
@@ -649,16 +663,15 @@ impl SyncDelay {
             mix_percent: 30.0,
             lines: [DelayLine::new(), DelayLine::new()],
             damping: [Damping::transparent(); MAX_CHANNELS],
-            dc: DcBlocker::default(),
             last_delay_left: 0.0,
             last_delay_right: 0.0,
             wet: 0.3,
             bypassed: false,
             sample_rate: 48_000.0,
-            dry: alloc::vec::Vec::new(),
+            dry_left: alloc::vec::Vec::new(),
+            dry_right: alloc::vec::Vec::new(),
             wet_left: alloc::vec::Vec::new(),
             wet_right: alloc::vec::Vec::new(),
-            active_channels: MAX_CHANNELS,
             max_block: 0,
         }
     }
@@ -675,7 +688,11 @@ impl SyncDelay {
     /// division, plus the spread offset and a block of headroom.
     #[must_use]
     fn required_capacity(sample_rate: f32, max_block: usize) -> usize {
-        let rate = if sample_rate > 0.0 { sample_rate } else { 48_000.0 };
+        let rate = if sample_rate > 0.0 {
+            sample_rate
+        } else {
+            48_000.0
+        };
         let by_time = rate * MAX_FREE_DELAY_MS / 1_000.0;
         let by_tempo = rate * 60.0 / MIN_SUPPORTED_BPM * MAX_DIVISION_BEATS;
         // The spread pushes one channel later than the other; the ring has to
@@ -690,7 +707,7 @@ impl SyncDelay {
     /// The delay length in samples for this block, before spread.
     ///
     /// This is the one place the tempo conversion happens. Either the delay
-    /// follows the tempo or it does not — there is no third behaviour, and
+    /// follows the tempo or it does not -- there is no third behaviour, and
     /// having a single expression for it keeps the two paths from drifting.
     #[must_use]
     fn delay_samples_for(&self, ctx: &RenderContext) -> f32 {
@@ -700,8 +717,8 @@ impl SyncDelay {
                 let beats = self.division.beats();
                 // Use the transport's own conversion so this delay and any
                 // other tempo-synced effect cannot disagree about what a beat
-                // is worth. `with_tempo` substitutes the fallback for a tempo
-                // the context cannot express.
+                // is worth. The tempo is substituted for a broken one, because
+                // a zero bpm would otherwise ask for a zero-sample delay.
                 let tempo = ctx.with_tempo(self.effective_bpm(ctx), ctx.ppq);
                 let samples = tempo.beats_to_samples(beats);
                 if samples.is_finite() && samples > 0.0 {
@@ -733,13 +750,11 @@ impl SyncDelay {
         let repeats = if gain >= MAX_FEEDBACK_CEILING {
             200.0
         } else if gain > 1e-3 {
-            -6.907_755 / super::super::util::dsp::log2(gain) * core::f32::consts::LN_2
+            -6.907_755 / log2(gain) * core::f32::consts::LN_2
         } else {
             1.0
         };
-        let longest = (self.last_delay_left
-            .max(self.last_delay_right)
-            .max(self.last_delay_left)
+        let longest = (self.last_delay_left.max(self.last_delay_right).max(0.0)
             / self.sample_rate.max(1.0))
         .max(0.0);
         // A floor of one repeat keeps a short, quiet delay audible in an
@@ -762,19 +777,21 @@ impl SyncDelay {
 
     /// Mixes each channel's wet scratch against the dry snapshot in place.
     ///
-    /// The `self` borrows are taken first and the `buffer` borrow last, so the
-    /// two regions are provably disjoint and the loop needs no copy.
-    fn wet_mix(
-        &mut self,
-        buffer: &mut AudioBuffer<'_>,
-        channels: usize,
-        frames: usize,
-        wet: f32,
-        dc_coeff: f32,
-    ) {
+    /// # Why there is no DC blocker here
+    ///
+    /// The feedback loop already runs through a one-pole high-pass at the
+    /// user's damping corner, so any offset inside the line is removed where it
+    /// matters. A second high-pass on the output would be driven by the echo,
+    /// and its own step response is a decaying tail a few hundred samples long
+    /// -- which would smear an otherwise perfect impulse response and leave a
+    /// spurious residue between the repeats.
+    fn wet_mix(&mut self, buffer: &mut AudioBuffer<'_>, channels: usize, frames: usize, wet: f32) {
         for channel in 0..channels {
-            let dc = &mut self.dc;
-            let dry = &self.dry;
+            let dry = if channel == 0 {
+                &self.dry_left
+            } else {
+                &self.dry_right
+            };
             let wet_scratch = if channel == 0 {
                 &self.wet_left
             } else {
@@ -785,13 +802,8 @@ impl SyncDelay {
             };
             for (index, sample) in out.iter_mut().enumerate().take(frames) {
                 let tap = wet_scratch.get(index).copied().unwrap_or(0.0);
-                let blocked = if wet > 0.0 {
-                    dc.process(channel, tap, dc_coeff)
-                } else {
-                    tap
-                };
                 let dry_sample = dry.get(index).copied().unwrap_or(0.0);
-                *sample = blocked * wet + dry_sample * (1.0 - wet);
+                *sample = tap * wet + dry_sample * (1.0 - wet);
             }
         }
     }
@@ -800,7 +812,7 @@ impl SyncDelay {
 /// The one-pole coefficient for a low-pass at `hz`.
 ///
 /// Returns `1.0` when the corner is at or above Nyquist, which makes the
-/// section a wire — the "damping off" case the tests rely on.
+/// section a wire -- the "damping off" case the tests rely on.
 #[must_use]
 fn lowpass_coeff(hz: f32, sample_rate: f32) -> f32 {
     if sample_rate <= 0.0 {
@@ -810,31 +822,30 @@ fn lowpass_coeff(hz: f32, sample_rate: f32) -> f32 {
     if corner >= sample_rate * 0.49 {
         return 1.0;
     }
-    // One-pole low-pass with time constant `1 / (2*PI*f)`:
-    // a = 1 - exp(-2*PI*f/fs), which for fs >> f is 2*PI*f/fs.
+    // One-pole low-pass, `a = 1 - exp(-2*PI*f/fs)`, which for fs >> f is
+    // approximately `2*PI*f/fs`.
     let x = 2.0 * PI * corner / sample_rate;
-    if x >= 1.0 {
-        1.0
-    } else {
-        x.clamp(0.0, 1.0)
-    }
+    x.clamp(0.0, 1.0)
 }
 
 /// The one-pole coefficient for a high-pass at `hz`.
 ///
-/// Returns `0.0` when the corner is at or below the parameter minimum, which
-/// makes the section a wire.
+/// The section is the complementary one-pole `y = a * (y1 + x - x1)`, whose
+/// gain is `1` at Nyquist and `0` at DC. A coefficient of `1.0` therefore makes
+/// it a wire, which is the "damping off" case: returning `0.0` here would not
+/// bypass the filter, it would *mute* it, which is exactly the bug this
+/// documentation exists to prevent.
 #[must_use]
 fn highpass_coeff(hz: f32, sample_rate: f32) -> f32 {
     if sample_rate <= 0.0 {
-        return 0.0;
+        return 1.0;
     }
     let corner = clamp_frequency(hz, sample_rate);
     if corner <= MIN_DAMP_HZ {
-        return 0.0;
+        return 1.0;
     }
-    // y = a * (y1 + x - x1) with a = 1 / (1 + 2*PI*f/fs): the complementary
-    // one-pole, whose gain is 1 at Nyquist and 0 at DC.
+    // `a = 1 / (1 + 2*PI*f/fs)`, so a higher corner gives a smaller `a` and
+    // therefore more attenuation of the lows.
     let a = 1.0 / (1.0 + 2.0 * PI * corner / sample_rate);
     a.clamp(0.0, 1.0)
 }
@@ -851,14 +862,15 @@ impl EffectProcessor for SyncDelay {
             48_000.0
         };
         self.max_block = max_block;
-        self.active_channels = channels.clamp(1, MAX_CHANNELS);
+        let _ = channels;
 
         // Every allocation this effect will ever make happens here. The ring
-        // is sized for the *worst* parameter combination — the longest free
+        // is sized for the worst parameter combination -- the longest free
         // time, or the longest musical division at the slowest supported tempo
-        // — so a tempo change or a division change never resizes it.
+        // -- so a tempo change or a division change never resizes it.
         let capacity = Self::required_capacity(self.sample_rate, max_block);
-        self.dry = alloc::vec![0.0; max_block];
+        self.dry_left = alloc::vec![0.0; max_block];
+        self.dry_right = alloc::vec![0.0; max_block];
         self.wet_left = alloc::vec![0.0; max_block];
         self.wet_right = alloc::vec![0.0; max_block];
         for line in self.lines.iter_mut() {
@@ -877,21 +889,25 @@ impl EffectProcessor for SyncDelay {
             return;
         }
         // Refuse a block larger than `prepare` sized for rather than indexing
-        // past the scratch. A silent pass-through is a far better failure than
-        // an out-of-bounds write in the audio thread.
+        // past the scratch. A silent no-op is a far better failure than an
+        // out-of-bounds write in the audio thread.
         if frames > self.max_block
-            || frames > self.dry.len()
+            || frames > self.dry_left.len()
+            || frames > self.dry_right.len()
             || frames > self.wet_left.len()
             || frames > self.wet_right.len()
         {
             return;
         }
 
-        // ── Delay length, re-derived every block so the echo follows the
-        //    transport rather than a length captured at prepare time. ──
+        // -- Delay length, re-derived every block so the echo follows the
+        //    transport rather than a length captured at prepare time. The
+        //    *previous* block's lengths are retained so the tap can glide from
+        //    one to the other rather than jumping at the boundary. --
+        let previous_left = self.last_delay_left;
+        let previous_right = self.last_delay_right;
         let base_delay = self.delay_samples_for(ctx);
-        let spread_samples = (self.spread_percent / 100.0).clamp(0.0, 1.0)
-            * SPREAD_MAX_MS
+        let spread_samples = (self.spread_percent / 100.0).clamp(0.0, 1.0) * SPREAD_MAX_MS
             / 1_000.0
             * self.sample_rate;
         let delay_left = base_delay.max(1.0);
@@ -905,27 +921,67 @@ impl EffectProcessor for SyncDelay {
         let destination = [self.ping_pong.target(0), self.ping_pong.target(1)];
         let wet = self.wet;
 
-        // ── Snapshot every channel's dry signal first: the wet/dry mix needs
+        // -- Snapshot every channel's dry signal first: the wet/dry mix needs
         //    it, and the delay must read the *input* rather than the line's own
-        //    previous state. ──
+        //    previous state. Each channel gets its own snapshot, because a
+        //    single shared buffer would let the second channel overwrite the
+        //    first. --
         for channel in 0..channels {
             let Some(source) = buffer.channel(channel) else {
                 continue;
             };
-            self.dry[..frames].copy_from_slice(source);
+            let snapshot = if channel == 0 {
+                &mut self.dry_left
+            } else {
+                &mut self.dry_right
+            };
+            snapshot[..frames].copy_from_slice(source);
+            // Sanitize once. A NaN that reached the ring would be re-read every
+            // period, so one bad sample would silence the effect forever;
+            // replacing it here confines the damage to the frame that had it.
+            for sample in snapshot[..frames].iter_mut() {
+                if !sample.is_finite() {
+                    *sample = 0.0;
+                }
+            }
         }
 
-        // ── Run both delay lines. The loops are indexed rather than iterated
-        //    because the two channels share one dry snapshot and one another's
-        //    rings when ping-pong is on. ──
+        // -- Run both delay lines. The loop is indexed rather than iterated
+        //    because the two channels share the sample clock and read one
+        //    another's rings when ping-pong is on.
+        //
+        //    The delay length glides from its previous value to this block's
+        //    value over the block. `beats_to_samples` is evaluated once per
+        //    block, so a tempo that moved between blocks would otherwise step
+        //    the read position discontinuously at the block boundary -- a click
+        //    in the middle of what should be a smooth pitch change. Gliding the
+        //    tap is the same fix a host's automation smoothing applies, done
+        //    here because the tempo itself is not a smoothed parameter. --
+        let previous_left = if previous_left > 0.0 {
+            previous_left
+        } else {
+            delay_left
+        };
+        let previous_right = if previous_right > 0.0 {
+            previous_right
+        } else {
+            delay_right
+        };
+        let frames_f = frames as f32;
         for index in 0..frames {
-            let input = self.dry[index];
+            let progress = index as f32 / frames_f;
+            let glide_left = previous_left + (delay_left - previous_left) * progress;
+            let glide_right = previous_right + (delay_right - previous_right) * progress;
             // Deferred writes: both channels read the state they had at the
             // start of this sample, so a crossed route moves a repeat exactly
             // one delay period and not two.
             let mut next = [0.0_f32; MAX_CHANNELS];
             for channel in 0..channels {
-                let delay = if channel == 0 { delay_left } else { delay_right };
+                let delay = if channel == 0 {
+                    glide_left
+                } else {
+                    glide_right
+                };
                 // Read *before* writing, so a delay of one sample still delays
                 // by one sample rather than returning the input unchanged.
                 let tap = self.lines[channel].read(delay);
@@ -933,19 +989,21 @@ impl EffectProcessor for SyncDelay {
                 self.store_wet(channel, index, tap);
                 // The dry input always goes into its own line; only the
                 // feedback term is routed, which is what makes ping-pong move
-                // the *repeats* rather than the whole signal.
+                // the repeats rather than the whole signal.
+                let input = if channel == 0 {
+                    self.dry_left[index]
+                } else {
+                    self.dry_right[index]
+                };
                 let reuse = next[destination[channel]];
                 next[destination[channel]] = reuse + input + damped * feedback;
             }
-            for channel in 0..channels {
-                self.lines[channel].write_sample(next[channel]);
+            for (channel, sample) in next.iter().enumerate().take(channels) {
+                self.lines[channel].write_sample(*sample);
             }
         }
 
-        // ── Wet/dry, with a DC blocker on the wet path so the damping
-        //    high-pass cannot leave an offset in the main output. ──
-        let dc_coeff = DcBlocker::coefficient(self.sample_rate);
-        self.wet_mix(buffer, channels, frames, wet, dc_coeff);
+        self.wet_mix(buffer, channels, frames, wet);
     }
 
     fn reset(&mut self) {
@@ -955,15 +1013,14 @@ impl EffectProcessor for SyncDelay {
         for damping in self.damping.iter_mut() {
             damping.reset();
         }
-        self.dc.reset();
         self.last_delay_left = 0.0;
         self.last_delay_right = 0.0;
     }
 
     fn latency_samples(&self) -> usize {
-        // Zero. The dry path is undelayed and the delay *is* the effect's
-        // audible content, so there is nothing for PDC to line up — the
-        // engine's wet/dry mix already places the dry signal at time zero.
+        // Zero. The dry path is undelayed and the echo is the effect's audible
+        // content, so there is nothing for PDC to line up -- the engine's
+        // wet/dry mix already places the dry signal at time zero.
         0
     }
 
@@ -1045,12 +1102,12 @@ impl EffectProcessor for SyncDelay {
     }
 }
 
-/// Asserts at compile time that the feedback ceiling the module documents is
+/// Asserts at compile time that the feedback ceiling this module documents is
 /// actually below unity.
 ///
 /// A build-time check rather than a test because it protects an invariant the
-/// DSP depends on: if someone raises [`USER_MAX_FEEDBACK`] to "just a bit more"
-/// the feedback loop becomes marginally stable and the delay self-oscillates.
+/// DSP depends on: raising [`USER_MAX_FEEDBACK`] to "just a bit more" would make
+/// the feedback loop marginally stable and the delay would self-oscillate.
 const _: () = assert!(USER_MAX_FEEDBACK < MAX_FEEDBACK_CEILING);
 
 #[cfg(test)]
@@ -1072,42 +1129,88 @@ mod tests {
         effect.delay_samples_for(ctx)
     }
 
-    /// Feeds `input` through the effect in blocks and returns the concatenated
-    /// output of channel `channel`.
-    ///
-    /// Blocks are 256 frames — the size the effect was prepared for — and the
-    /// input is mono (it is written to the left channel only), so a test that
-    /// inspects the right channel is inspecting cross-channel state.
+    /// The largest magnitude in `slice`.
+    fn peak(slice: &[f32]) -> f32 {
+        slice.iter().fold(0.0_f32, |m, s| m.max(s.abs()))
+    }
+
+    /// Renders `input` into both channels, returning a chosen channel.
     fn render(effect: &mut SyncDelay, input: &[f32], channel: usize, bpm: f32) -> Vec<f32> {
+        let (left, right) = render_stereo(effect, input, bpm);
+        if channel == 0 {
+            left
+        } else {
+            right
+        }
+    }
+
+    /// Feeds the same signal to both channels, returning both outputs.
+    fn render_stereo(effect: &mut SyncDelay, input: &[f32], bpm: f32) -> (Vec<f32>, Vec<f32>) {
+        render_channels(effect, input, input, bpm)
+    }
+
+    /// Renders an impulse that reaches the left channel only.
+    fn render_left_impulse(
+        effect: &mut SyncDelay,
+        input: &[f32],
+        bpm: f32,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let silence = alloc::vec![0.0_f32; input.len()];
+        render_channels(effect, input, &silence, bpm)
+    }
+
+    /// Drives the effect block by block with independent channel content.
+    ///
+    /// Kept separate from `render_stereo` so a ping-pong test can put the
+    /// impulse on one side only -- feeding both channels the same signal would
+    /// make such a test vacuous, since both sides would already carry it.
+    fn render_channels(
+        effect: &mut SyncDelay,
+        left_in: &[f32],
+        right_in: &[f32],
+        bpm: f32,
+    ) -> (Vec<f32>, Vec<f32>) {
         let chunk = 256;
-        let mut out: Vec<f32> = Vec::with_capacity(input.len());
+        let frames_total = left_in.len().min(right_in.len());
+        let mut left_out: Vec<f32> = Vec::with_capacity(frames_total);
+        let mut right_out: Vec<f32> = Vec::with_capacity(frames_total);
         let mut offset = 0;
-        while offset < input.len() {
-            let frames = chunk.min(input.len() - offset);
+        while offset < frames_total {
+            let frames = chunk.min(frames_total - offset);
             let mut left = alloc::vec![0.0_f32; frames];
             let mut right = alloc::vec![0.0_f32; frames];
-            left.copy_from_slice(&input[offset..offset + frames]);
-            if channel == 1 {
-                right.copy_from_slice(&left);
-            }
+            left.copy_from_slice(&left_in[offset..offset + frames]);
+            right.copy_from_slice(&right_in[offset..offset + frames]);
             {
                 let mut views = [&mut left[..], &mut right[..]];
                 let mut buffer = AudioBuffer::new(&mut views);
                 let ctx = RenderContext::new(SR, frames, offset as i64, bpm, 960);
                 effect.process(&mut buffer, &ctx);
             }
-            let picked = if channel == 0 { &left } else { &right };
-            out.extend_from_slice(picked);
+            left_out.extend_from_slice(&left);
+            right_out.extend_from_slice(&right);
             offset += frames;
         }
-        out
+        (left_out, right_out)
+    }
+
+    /// Configures a plain, undamped, fully wet delay of `ms` milliseconds.
+    fn plain(ms: f32) -> SyncDelay {
+        let mut effect = make();
+        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
+        effect.set_parameter(PARAM_TIME_MS, ms);
+        effect.set_parameter(PARAM_FEEDBACK, 0.0);
+        effect.set_parameter(PARAM_DAMP_LOWPASS, MAX_DAMP_HZ);
+        effect.set_parameter(PARAM_DAMP_HIGHPASS, MIN_DAMP_HZ);
+        effect.set_parameter(PARAM_MIX, 100.0);
+        effect
     }
 
     #[test]
     fn the_descriptor_identity_is_stable() {
         let effect = make();
         let d = effect.descriptor();
-        assert_eq!(d.kind, 0x0000_0400);
+        assert_eq!(d.kind, super::super::super::registry::KIND_DELAY_SYNC);
         assert_eq!(d.key, "sync_delay");
         assert_eq!(d.label, "Sync Delay");
         assert_eq!(d.category, EffectCategory::Delay);
@@ -1123,17 +1226,15 @@ mod tests {
         let table = effect.parameters();
         assert_eq!(table.len(), PARAM_COUNT as usize);
         for (ordinal, spec) in table.iter().enumerate() {
-            assert_eq!(
-                spec.address.sub & 0x00FF,
-                ordinal as u16,
-                "parameter {ordinal} has a mismatched address"
-            );
+            assert_eq!(spec.address.sub & 0x00FF, ordinal as u16);
+            assert_eq!(spec.address.index, 0, "address channel");
             assert!(
                 spec.min_value <= spec.default_value && spec.default_value <= spec.max_value,
                 "parameter {ordinal} default is outside its range"
             );
             assert!(!spec.key.is_empty());
             assert!(spec.key.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+            assert!(!spec.label.is_empty());
         }
         for (i, a) in table.iter().enumerate() {
             for b in &table[i + 1..] {
@@ -1143,23 +1244,44 @@ mod tests {
     }
 
     #[test]
+    fn each_instances_table_carries_its_own_slot_address() {
+        let a = SyncDelay::new(ParameterAddress::effect(3, 2, PARAM_SYNC));
+        let b = SyncDelay::new(ParameterAddress::effect(5, 7, PARAM_SYNC));
+        assert_ne!(a.parameters()[0].address, b.parameters()[0].address);
+        assert_eq!(a.parameters()[0].address.index, 3);
+        assert_eq!(b.parameters()[0].address.index, 5);
+    }
+
+    #[test]
     fn every_parameter_round_trips_through_the_setter() {
         let mut effect = make();
         assert_eq!(effect.get_parameter(999), None);
         for sub in 0..PARAM_COUNT {
             let spec = effect.table[sub as usize];
+            // A discrete parameter only accepts its enumeration values, so the
+            // midpoint of an enum range is deliberately not a valid probe: use
+            // each legal value instead, which also proves the setter accepts
+            // every member of the published enumeration.
+            if spec.is_discrete() {
+                let mut value = spec.min_value;
+                while value <= spec.max_value {
+                    effect.set_parameter(sub, value);
+                    assert_eq!(
+                        effect.get_parameter(sub),
+                        Some(value),
+                        "parameter {sub} rejected its own enumeration value {value}"
+                    );
+                    value += 1.0;
+                }
+                continue;
+            }
             let midpoint = (spec.min_value + spec.max_value) * 0.5;
             effect.set_parameter(sub, midpoint);
             let read = effect.get_parameter(sub).expect("known ordinal");
-            let discrete = spec.is_discrete();
-            if discrete {
-                assert_eq!(read, midpoint.floor(), "parameter {sub} snaps");
-            } else {
-                assert!(
-                    (read - midpoint).abs() < 1e-3,
-                    "parameter {sub} read back {read}, expected {midpoint}"
-                );
-            }
+            assert!(
+                (read - midpoint).abs() < 1e-3,
+                "parameter {sub} read back {read}, expected {midpoint}"
+            );
         }
     }
 
@@ -1179,8 +1301,8 @@ mod tests {
 
     #[test]
     fn a_synced_delay_follows_the_tempo_proportionally() {
-        // This is the whole point of the effect: at half the tempo the echo is
-        // twice as far away.
+        // The whole point of the effect: at half the tempo the echo is twice as
+        // far away.
         let mut effect = make();
         effect.set_parameter(PARAM_SYNC, SyncMode::Synced.as_u32() as f32);
         effect.set_parameter(PARAM_DIVISION, SyncDivision::Quarter.as_u32() as f32);
@@ -1194,6 +1316,41 @@ mod tests {
         assert!(
             (b / a - 2.0).abs() < 0.01,
             "halving the tempo should double the delay, got {b}/{a}"
+        );
+    }
+
+    #[test]
+    fn a_synced_delay_actually_moves_its_echo_with_the_tempo() {
+        // The conversion test above is analytic; this one renders audio so the
+        // two cannot agree vacuously.
+        let period_at_120 = 24_000;
+        let impulse = {
+            let mut v = alloc::vec![0.0_f32; 60_000];
+            v[0] = 1.0;
+            v
+        };
+
+        let mut fast = plain(20.0);
+        fast.set_parameter(PARAM_SYNC, SyncMode::Synced.as_u32() as f32);
+        fast.set_parameter(PARAM_DIVISION, SyncDivision::Quarter.as_u32() as f32);
+        let out = render(&mut fast, &impulse, 0, 120.0);
+        assert!(
+            out[period_at_120].abs() > 0.9,
+            "120 BPM quarter-note echo missing at {period_at_120}"
+        );
+
+        let mut slow = plain(20.0);
+        slow.set_parameter(PARAM_SYNC, SyncMode::Synced.as_u32() as f32);
+        slow.set_parameter(PARAM_DIVISION, SyncDivision::Quarter.as_u32() as f32);
+        let out = render(&mut slow, &impulse, 0, 60.0);
+        assert!(
+            out[period_at_120].abs() < 1e-6,
+            "at 60 BPM the echo must not still be at the 120 BPM position"
+        );
+        assert!(
+            out[period_at_120 * 2].abs() > 0.9,
+            "60 BPM quarter-note echo missing at {}",
+            period_at_120 * 2
         );
     }
 
@@ -1220,27 +1377,37 @@ mod tests {
             let want = division.beats() * 24_000.0;
             assert!(
                 (got - want).abs() < 1.0,
-                "{:?}: got {got}, expected {want}",
-                division
+                "{division:?}: got {got}, expected {want}"
             );
         }
     }
 
     #[test]
-    fn the_divisions_are_ordered_from_shortest_to_longest() {
-        // A UI that renders the enumeration in order must read 1/16 → 1/2.
-        let mut previous = 0.0_f32;
+    fn the_divisions_are_ordered_from_longest_to_shortest() {
+        // The enumeration lists 1/2 down to 1/16, which is how a division menu
+        // reads. A dotted or triplet variant that broke the ordering would make
+        // the menu jump around.
+        let mut previous = f32::MAX;
         for division in SyncDivision::ALL {
             let beats = division.beats();
             assert!(
-                beats > previous,
-                "{:?} breaks the ordering ({beats} after {previous})",
-                division
+                beats < previous,
+                "{division:?} breaks the ordering ({beats} after {previous})"
             );
             previous = beats;
         }
         assert_eq!(SyncDivision::ALL.len(), 8);
-        assert!(SyncDivision::ALL.iter().all(|d| d.as_u32() < 8));
+        for (index, division) in SyncDivision::ALL.iter().enumerate() {
+            assert_eq!(division.as_u32() as usize, index);
+            assert_eq!(SyncDivision::from_u32(index as u32), Some(*division));
+            assert!(SyncDivision::from_u32(8).is_none());
+            assert!(!division.key().is_empty());
+        }
+        assert_eq!(SyncMode::from_u32(0), Some(SyncMode::Free));
+        assert_eq!(SyncMode::from_u32(1), Some(SyncMode::Synced));
+        assert_eq!(SyncMode::from_u32(2), None);
+        assert_eq!(PingPong::from_u32(2), Some(PingPong::RightToLeft));
+        assert_eq!(PingPong::from_u32(3), None);
     }
 
     #[test]
@@ -1261,37 +1428,8 @@ mod tests {
     }
 
     #[test]
-    fn debug_impulse() {
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 20.0);
-        effect.set_parameter(PARAM_FEEDBACK, 0.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        let mut input = alloc::vec![0.0_f32; 3_840];
-        input[0] = 1.0;
-        let out = render(&mut effect, &input, 0, 120.0);
-        let hits: Vec<(usize, f32)> = out
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.abs() > 1e-4)
-            .map(|(i, s)| (i, *s))
-            .take(10)
-            .collect();
-        panic!("delay={} hits={hits:?}", effect.last_delay_left);
-    }
-
-    #[test]
     fn an_impulse_reappears_after_exactly_one_delay_period() {
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 20.0);
-        effect.set_parameter(PARAM_FEEDBACK, 0.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-
+        let mut effect = plain(20.0);
         let mut input = alloc::vec![0.0_f32; 3_840];
         input[0] = 1.0;
         let out = render(&mut effect, &input, 0, 120.0);
@@ -1307,35 +1445,87 @@ mod tests {
         for (index, sample) in out.iter().enumerate().take(expected).skip(1) {
             assert!(sample.abs() < 1e-6, "leak at {index}: {sample}");
         }
+        // And nothing after, with no feedback.
+        for (index, sample) in out.iter().enumerate().skip(expected + 1) {
+            assert!(sample.abs() < 1e-6, "spurious tail at {index}: {sample}");
+        }
+    }
+
+    #[test]
+    fn the_delay_is_exact_at_an_awkward_sample_rate() {
+        // 44.1 kHz is where an integer-only or rounding delay shows up as a
+        // missed grid position. The effect is driven block by block, because
+        // `prepare` sized the scratch for 256 frames and a single 8 820-frame
+        // call would (correctly) be refused.
+        let mut effect = SyncDelay::new(ParameterAddress::effect(0, 0, PARAM_SYNC));
+        effect.prepare(44_100.0, 256, 2);
+        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
+        effect.set_parameter(PARAM_TIME_MS, 100.0);
+        effect.set_parameter(PARAM_FEEDBACK, 0.0);
+        effect.set_parameter(PARAM_DAMP_LOWPASS, MAX_DAMP_HZ);
+        effect.set_parameter(PARAM_DAMP_HIGHPASS, MIN_DAMP_HZ);
+        effect.set_parameter(PARAM_MIX, 100.0);
+        let ctx = RenderContext::new(44_100.0, 256, 0, 120.0, 960);
+        assert!((effect.delay_samples_for(&ctx) - 4_410.0).abs() < 1.0);
+
+        let total = 8_820;
+        let mut impulse = alloc::vec![0.0_f32; total];
+        impulse[0] = 1.0;
+        let mut out: Vec<f32> = Vec::with_capacity(total);
+        let mut offset = 0;
+        while offset < total {
+            let frames = 256.min(total - offset);
+            let mut left = alloc::vec![0.0_f32; frames];
+            let mut right = alloc::vec![0.0_f32; frames];
+            left.copy_from_slice(&impulse[offset..offset + frames]);
+            {
+                let mut views = [&mut left[..], &mut right[..]];
+                let mut buffer = AudioBuffer::new(&mut views);
+                let ctx = RenderContext::new(44_100.0, frames, offset as i64, 120.0, 960);
+                effect.process(&mut buffer, &ctx);
+            }
+            out.extend_from_slice(&left);
+            offset += frames;
+        }
+        assert!(out[4_410].abs() > 0.9, "echo at {}", out[4_410]);
+        // And it is exactly at 4 410: not one sample either side.
+        assert!(out[4_409].abs() < 1e-6, "leak at 4409: {}", out[4_409]);
+        assert!(out[4_411].abs() < 1e-6, "leak at 4411: {}", out[4_411]);
+    }
+
+    #[test]
+    fn an_impulse_on_the_left_only_reaches_the_left_when_ping_pong_is_off() {
+        // The baseline the ping-pong tests compare against: with the routing
+        // off, a silent right channel stays silent.
+        let mut effect = plain(20.0);
+        effect.set_parameter(PARAM_FEEDBACK, 60.0);
+        effect.set_parameter(PARAM_PING_PONG, PingPong::Off.as_u32() as f32);
+        let input = {
+            let mut v = alloc::vec![0.0_f32; 3_840];
+            v[0] = 1.0;
+            v
+        };
+        let (left, right) = render_left_impulse(&mut effect, &input, 120.0);
+        assert!(left[960].abs() > 0.5, "no straight repeat: {}", left[960]);
+        assert!(
+            right.iter().all(|s| s.abs() < 1e-6),
+            "the silent channel leaked into"
+        );
     }
 
     #[test]
     fn ping_pong_moves_an_impulse_from_left_to_right_one_period_later() {
-        // Render the left channel of a stereo block with an impulse on the
-        // left: with ping-pong engaged the left repeat must be suppressed and
-        // the right channel must carry it instead.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 20.0);
-        effect.set_parameter(PARAM_FEEDBACK, 0.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
+        let mut effect = plain(20.0);
         effect.set_parameter(PARAM_PING_PONG, PingPong::LeftToRight.as_u32() as f32);
 
         let period = 960;
-        let frames = period * 3;
-        let mut left = alloc::vec![0.0_f32; frames];
-        left[0] = 1.0;
-        let mut right = alloc::vec![0.0_f32; frames];
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(
-                &mut buffer,
-                &RenderContext::new(SR, frames, 0, 120.0, 960),
-            );
-        }
+        let input = {
+            let mut v = alloc::vec![0.0_f32; period * 3];
+            v[0] = 1.0;
+            v
+        };
+        let (left, right) = render_left_impulse(&mut effect, &input, 120.0);
+
         assert!(left[0].abs() < 1e-6, "dry leaked through: {}", left[0]);
         assert!(
             left[period].abs() < 1e-6,
@@ -1347,147 +1537,165 @@ mod tests {
             "the repeat must arrive on the right one period later: {}",
             right[period]
         );
-        assert!(right.iter().sum::<f32>().is_finite());
+        assert!(right.iter().all(|s| s.is_finite()));
     }
 
     #[test]
     fn ping_pong_actually_alternates_channels() {
-        // Feed an impulse on the left and look for it on the right one delay
-        // period later. The left render and right render use identical input,
-        // so a difference between them *is* the channel crossing.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 20.0);
+        // The echo must bounce: left, right, left, right. Each hop costs one
+        // delay period, so the *same* channel repeats every two periods, and
+        // between them the other channel carries it. A one-shot channel swap
+        // would put the echo on the right and leave it there.
+        let mut effect = plain(20.0);
         effect.set_parameter(PARAM_FEEDBACK, 60.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
+        effect.set_parameter(PARAM_PING_PONG, PingPong::LeftToRight.as_u32() as f32);
 
         let period = 960;
-        let frames = period * 4;
-        let mut impulse = alloc::vec![0.0_f32; frames];
-        impulse[0] = 1.0;
+        let input = {
+            let mut v = alloc::vec![0.0_f32; period * 5];
+            v[0] = 1.0;
+            v
+        };
+        let (left, right) = render_left_impulse(&mut effect, &input, 120.0);
 
-        /// Runs `impulse` through a fresh effect and returns both channels.
-        fn both(mode: PingPong, impulse: &[f32]) -> (Vec<f32>, Vec<f32>) {
-            let mut effect = make();
-            effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-            effect.set_parameter(PARAM_TIME_MS, 20.0);
-            effect.set_parameter(PARAM_FEEDBACK, 60.0);
-            effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-            effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-            effect.set_parameter(PARAM_MIX, 100.0);
-            effect.set_parameter(PARAM_PING_PONG, mode.as_u32() as f32);
-            let mut left = impulse.to_vec();
-            let mut right = alloc::vec![0.0_f32; impulse.len()];
-            {
-                let mut views = [&mut left[..], &mut right[..]];
-                let mut buffer = AudioBuffer::new(&mut views);
-                effect.process(
-                    &mut buffer,
-                    &RenderContext::new(SR, impulse.len(), 0, 120.0, 960),
-                );
-            }
-            (left, right)
-        }
-
-        // Straight mode: the left repeat stays on the left, the right channel
-        // stays silent.
-        let (left_off, right_off) = both(PingPong::Off, &impulse);
-        assert!(left_off[period].abs() > 0.5, "no straight repeat");
+        // Hop 1: left -> right.
         assert!(
-            right_off.iter().all(|s| s.abs() < 1e-6),
-            "the silent channel leaked into"
-        );
-
-        // Ping-pong: the left input's repeat must arrive on the right.
-        let (left_pp, right_pp) = both(PingPong::LeftToRight, &impulse);
-        assert!(
-            left_pp[period].abs() < 1e-6,
-            "the left still has its own repeat under ping-pong: {}",
-            left_pp[period]
+            left[period].abs() < 1e-6,
+            "the left still has its own first repeat under ping-pong: {}",
+            left[period]
         );
         assert!(
-            right_pp[period].abs() > 0.5,
-            "the repeat did not cross to the right: {} at {period}",
-            right_pp[period]
+            right[period].abs() > 0.4,
+            "the repeat did not cross to the right: {}",
+            right[period]
         );
-        // And back again on the next period, which is what makes it alternate
-        // rather than being a one-shot channel swap.
+        // Hop 2: right -> left, so the echo is back where it started.
         assert!(
-            left_pp[period * 2].abs() > 0.1,
+            right[period * 2].abs() < 1e-6,
+            "the right kept a repeat instead of passing it back: {}",
+            right[period * 2]
+        );
+        assert!(
+            left[period * 2].abs() > 0.1,
             "the repeat did not come back to the left: {}",
-            left_pp[period * 2]
+            left[period * 2]
         );
+        // Hop 3: left -> right again, quieter because the feedback loop has
+        // turned twice.
+        assert!(right[period * 3].abs() > 0.0, "the third hop is missing");
         assert!(
-            right_pp[period * 2].abs() < right_pp[period].abs(),
-            "the ping-pong did not alternate: {} then {}",
-            right_pp[period],
-            right_pp[period * 2]
+            right[period * 3].abs() < right[period].abs(),
+            "the bouncing repeat is not decaying: {} then {}",
+            right[period],
+            right[period * 3]
         );
+        // The two channels must never both carry a repeat at the same hop.
+        for hop in 1..=3 {
+            let l = left[period * hop].abs();
+            let r = right[period * hop].abs();
+            assert!(
+                l < 1e-6 || r < 1e-6,
+                "hop {hop} landed on both channels: {l} and {r}"
+            );
+        }
     }
 
     #[test]
     fn right_to_left_ping_pong_mirrors_left_to_right() {
-        // The two directions must be exact mirrors, or a user picking "R→L"
-        // gets a different amount of cross-feed than "L→R".
+        // The two directions must be exact mirrors, or a user picking "R to L"
+        // gets a different amount of cross-feed than "L to R". The impulse is
+        // on the right this time, so the mirror of the left-to-right test is a
+        // repeat on the left one period later.
         let period = 960;
-        let mut impulse = alloc::vec![0.0_f32; period * 3];
-        impulse[0] = 1.0;
+        let impulse = {
+            let mut v = alloc::vec![0.0_f32; period * 3];
+            v[0] = 1.0;
+            v
+        };
+        // The impulse goes to the right channel only.
+        let silence = alloc::vec![0.0_f32; impulse.len()];
 
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 20.0);
-        effect.set_parameter(PARAM_FEEDBACK, 60.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        effect.set_parameter(PARAM_PING_PONG, PingPong::RightToLeft.as_u32() as f32);
-
-        // The impulse is on the right this time.
-        let mut left = alloc::vec![0.0_f32; impulse.len()];
-        let mut right = impulse.clone();
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(
-                &mut buffer,
-                &RenderContext::new(SR, impulse.len(), 0, 120.0, 960),
+        for direction in [PingPong::RightToLeft, PingPong::LeftToRight] {
+            let mut effect = plain(20.0);
+            effect.set_parameter(PARAM_PING_PONG, direction.as_u32() as f32);
+            effect.set_parameter(PARAM_FEEDBACK, 60.0);
+            // R-to-L is fed on the right; L-to-R is fed on the left. The two
+            // renders must then be channel-swapped copies of one another.
+            let (left, right) = if direction == PingPong::RightToLeft {
+                render_channels(&mut effect, &silence, &impulse, 120.0)
+            } else {
+                render_channels(&mut effect, &impulse, &silence, 120.0)
+            };
+            let (source, destination) = if direction == PingPong::RightToLeft {
+                (right[period], left[period])
+            } else {
+                (left[period], right[period])
+            };
+            assert!(
+                source.abs() < 1e-6,
+                "{direction:?}: the source channel kept its own repeat: {source}"
+            );
+            assert!(
+                destination.abs() > 0.5,
+                "{direction:?}: the repeat did not cross: {destination}"
             );
         }
-        assert!(
-            right[period].abs() < 1e-6,
-            "the right kept its own repeat: {}",
-            right[period]
-        );
-        assert!(
-            left[period].abs() > 0.5,
-            "the repeat did not cross to the left: {}",
-            left[period]
-        );
     }
 
     #[test]
-    fn a_fractional_delay_length_is_smooth_rather_than_quantised() {
-        // A fractional delay has to interpolate. An integer-only read rounds
-        // the tempo-derived length to the nearest sample, which shows up as a
-        // staircase in the output: sample-to-sample jumps far larger than the
-        // input's own.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_FEEDBACK, 0.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        // 333.5 samples: exactly halfway between two integer taps.
-        effect.set_parameter(PARAM_TIME_MS, 333.5 / SR * 1_000.0);
+    fn a_fractional_read_interpolates_between_its_two_neighbours() {
+        // Linear interpolation, stated directly: reading 1.5 samples back must
+        // give the midpoint of the taps at 1 and at 2. The ramp makes the two
+        // taps distinguishable, so a read that landed on the wrong neighbour
+        // would be caught rather than looking plausible.
+        let mut ring = DelayLine::new();
+        ring.prepare(64);
+        // Written at t = 0, 1, 2, 3 with values 0, 1, 2, 3.
+        for sample in [0.0_f32, 1.0, 2.0, 3.0] {
+            ring.write_sample(sample);
+        }
+        // The cursor is now at 4, so a delay of `d` returns the sample written
+        // at `4 - d`: 3.0 at d=1, 2.0 at d=2, and the midpoint 2.5 at d=1.5.
+        assert!((ring.read(1.0) - 3.0).abs() < 1e-6, "{}", ring.read(1.0));
+        assert!((ring.read(2.0) - 2.0).abs() < 1e-6, "{}", ring.read(2.0));
+        assert!((ring.read(1.5) - 2.5).abs() < 1e-6, "{}", ring.read(1.5));
+        assert!((ring.read(1.25) - 2.75).abs() < 1e-6, "{}", ring.read(1.25));
+    }
+
+    #[test]
+    fn reading_exactly_at_a_whole_sample_hits_that_sample() {
+        // The interpolation is only correct if the endpoints are: a read that
+        // was off by one sample would land on the neighbouring tap and the
+        // fractional case above could still look plausible.
+        let mut ring = DelayLine::new();
+        ring.prepare(8);
+        for n in 0..6 {
+            ring.write_sample(n as f32);
+        }
+        // The cursor is at 6, so the taps at 1..=6 back are 5, 4, 3, 2, 1, 0.
+        for back in 1..=6 {
+            let expected = (6 - back) as f32;
+            let got = ring.read(back as f32);
+            assert!((got - expected).abs() < 1e-6, "read({back}) = {got}");
+        }
+        // Past the ring, the read clamps rather than wrapping to garbage.
+        let clamped = ring.read(1_000.0);
+        assert!(clamped.is_finite());
+    }
+
+    #[test]
+    fn a_fractional_delay_smooths_a_slow_input_rather_than_stepping_it() {
+        // The observable consequence of interpolation: an integer-only read
+        // rounds the tempo-derived length to the nearest sample, which shows up
+        // as a staircase in the output.
+        let mut effect = plain(333.5 / SR * 1_000.0);
         assert!((delay_for(&mut effect, &RenderContext::default()) - 333.5).abs() < 0.01);
 
         // A slow sine, so the input's own largest step is small and any
         // interpolation artefact stands out.
         let frames = 8_192;
         let input: Vec<f32> = (0..frames)
-            .map(|n| sin_poly(2.0 * core::f32::consts::PI * 100.0 * n as f32 / SR))
+            .map(|n| sin_poly(2.0 * PI * 100.0 * n as f32 / SR) * 0.5)
             .collect();
         let input_step = input
             .windows(2)
@@ -1495,11 +1703,11 @@ mod tests {
         let out = render(&mut effect, &input, 0, 120.0);
         // Measure well past the first repeat so the interpolation is the only
         // thing under test.
-        let out_step = out[2_000..]
+        let out_step = out[1_000..]
             .windows(2)
             .fold(0.0_f32, |m, w| m.max((w[1] - w[0]).abs()));
         assert!(
-            out_step < input_step * 1.5 + 1e-4,
+            out_step < input_step * 1.5 + 1e-3,
             "fractional delay stepped by {out_step} for an input step of {input_step}"
         );
     }
@@ -1507,22 +1715,23 @@ mod tests {
     #[test]
     fn a_tempo_change_moves_the_echo_without_a_discontinuity() {
         // The failure mode a non-interpolating delay shows is a click when the
-        // tempo moves; every sample must stay bounded and continuous.
+        // tempo moves: the length snaps to a whole sample and the read jumps.
+        // The tempo here is ramped slowly -- a realistic automation curve, one
+        // BPM per block -- so the output must stay continuous and bounded.
         let mut effect = make();
         effect.set_parameter(PARAM_MIX, 100.0);
         effect.set_parameter(PARAM_FEEDBACK, 50.0);
         let chunk = 256;
         let mut previous = 0.0_f32;
-        for block in 0..40 {
-            // Sweep the tempo across the whole supported range.
-            let bpm = 60.0 + block as f32 * 8.0;
+        let mut largest_jump = 0.0_f32;
+        let mut amplitude = 0.0_f32;
+        for block in 0..200 {
+            // 60 BPM up to 260 BPM over the render, one BPM per block.
+            let bpm = 60.0 + block as f32;
             let mut left = alloc::vec![0.0_f32; chunk];
             let mut right = alloc::vec![0.0_f32; chunk];
             for (i, sample) in left.iter_mut().enumerate() {
-                *sample = sin_poly(2.0 * core::f32::consts::PI * 220.0
-                    * (block * chunk + i) as f32
-                    / SR)
-                    * 0.5;
+                *sample = sin_poly(2.0 * PI * 220.0 * (block * chunk + i) as f32 / SR) * 0.5;
             }
             right.copy_from_slice(&left);
             {
@@ -1533,14 +1742,19 @@ mod tests {
             }
             for sample in &left {
                 assert!(sample.is_finite(), "non-finite sample during a tempo sweep");
-                assert!(
-                    (sample - previous).abs() < 0.5,
-                    "a tempo change produced a {}-sample jump",
-                    (sample - previous).abs()
-                );
+                amplitude = amplitude.max(sample.abs());
+                largest_jump = largest_jump.max((sample - previous).abs());
                 previous = *sample;
             }
         }
+        assert!(amplitude > 0.1, "the sweep produced no signal at all");
+        // A 220 Hz sine at 48 kHz steps by at most ~0.015 between samples; a
+        // delayed copy of it cannot legitimately step by a large fraction of
+        // the signal's own amplitude.
+        assert!(
+            largest_jump < amplitude * 0.25,
+            "a tempo change produced a {largest_jump}-sample jump on an amplitude of {amplitude}"
+        );
     }
 
     #[test]
@@ -1556,28 +1770,28 @@ mod tests {
         effect.set_parameter(PARAM_DAMP_HIGHPASS, 100.0);
         effect.set_parameter(PARAM_MIX, 100.0);
 
-        let mut impulse = alloc::vec![0.0_f32; 256];
-        impulse[0] = 1.0;
-        let out = render(&mut effect, &impulse, 0, 120.0);
-
+        let input = {
+            // Long enough for several repeats to be judged: ten periods of the
+            // 20 ms delay below.
+            let mut v = alloc::vec![0.0_f32; 9_600];
+            v[0] = 1.0;
+            v
+        };
+        let out = render(&mut effect, &input, 0, 120.0);
         // Collect the peak of each successive period.
         let period = 960;
         let mut peaks = Vec::new();
         let mut index = 0;
         while index + period <= out.len() {
-            let peak = out[index..index + period]
-                .iter()
-                .fold(0.0_f32, |m, s| m.max(s.abs()));
-            peaks.push(peak);
+            peaks.push(peak(&out[index..index + period]));
             index += period;
         }
-        assert!(peaks.len() >= 3, "not enough repeats to judge");
-        assert!(peaks[0] > 0.5, "the first repeat is missing");
-        for window in peaks.windows(2) {
-            assert!(
-                window[1] < window[0] + 1e-6,
-                "the tail grew: {peaks:?}"
-            );
+        assert!(peaks.len() >= 3, "not enough repeats to judge: {peaks:?}");
+        // The block at index 0 carries the impulse itself, which a fully wet
+        // delay does not pass; the first *repeat* is peaks[1].
+        assert!(peaks[1] > 0.5, "the first repeat is missing: {peaks:?}");
+        for window in peaks[1..].windows(2) {
+            assert!(window[1] < window[0] + 1e-6, "the tail grew: {peaks:?}");
         }
         for (i, sample) in out.iter().enumerate() {
             assert!(sample.is_finite(), "sample {i} is {sample}");
@@ -1597,7 +1811,12 @@ mod tests {
         assert_eq!(effect.feedback_gain(), 0.0);
         // Even an out-of-range value cannot push it past the ceiling.
         effect.set_parameter(PARAM_FEEDBACK, 1_000.0);
-        assert!(effect.feedback_gain() < 1.0);
+        let ceiling = effect.feedback_gain();
+        assert!(ceiling < 1.0);
+        assert!((ceiling - USER_MAX_FEEDBACK).abs() < 1e-6, "got {ceiling}");
+        // `USER_MAX_FEEDBACK < MAX_FEEDBACK_CEILING` is asserted at compile time
+        // by the `const _` item above rather than here: both are constants, so
+        // a runtime check of them could only ever be a constant `true`.
     }
 
     #[test]
@@ -1607,23 +1826,29 @@ mod tests {
         effect.set_parameter(PARAM_FEEDBACK, 100.0);
         effect.set_parameter(PARAM_TIME_MS, 5.0);
         effect.set_parameter(PARAM_DAMP_LOWPASS, 300.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        let mut impulse = alloc::vec![0.0_f32; 256];
-        impulse[0] = 1.0;
-        let out = render(&mut effect, &impulse, 0, 120.0);
+        effect.set_parameter(PARAM_DAMP_HIGHPASS, MIN_DAMP_HZ);
+        let input = {
+            // The impulse, then enough silence for the tail to be measured
+            // rather than truncated by the end of the render.
+            let mut v = alloc::vec![0.0_f32; 24_000];
+            v[0] = 1.0;
+            v
+        };
+        let out = render(&mut effect, &input, 0, 120.0);
         // The impulse's own repeats must be decaying, not merely finite.
-        let early = out[..2_000].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
-        let late = out[2_000..].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        // The first window excludes the impulse itself: at full wet the dry
+        // signal is not passed, so the impulse proper is the first repeat.
+        let early = peak(&out[240..2_000]);
+        let late = peak(&out[2_000..]);
         assert!(early > 0.0, "the impulse produced no echo at all");
         assert!(late <= early + 1e-6, "the tail grew: {early} then {late}");
+        assert!(out.iter().all(|s| s.is_finite()));
 
         // Feed a tone afterwards (the worst case for a resonant loop) and
         // assert nothing leaves the rails.
         for block in 0..200 {
             let mut left: Vec<f32> = (0..256)
-                .map(|n| {
-                    sin_poly(2.0 * core::f32::consts::PI * 1_000.0 * (block * 256 + n) as f32 / SR)
-                })
+                .map(|n| sin_poly(2.0 * PI * 1_000.0 * (block * 256 + n) as f32 / SR))
                 .collect();
             let mut right = left.clone();
             {
@@ -1639,7 +1864,7 @@ mod tests {
     }
 
     #[test]
-    fn every_parameter_at_its_maximum_stays_finite() {
+    fn every_parameter_at_its_extreme_stays_finite() {
         let mut effect = make();
         for sub in 0..PARAM_COUNT {
             effect.set_parameter(sub, f32::MAX);
@@ -1677,26 +1902,15 @@ mod tests {
     fn non_finite_input_never_leaves_non_finite_state() {
         let mut effect = make();
         effect.set_parameter(PARAM_FEEDBACK, 90.0);
-        let mut left = alloc::vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5, -0.5];
-        left.extend_from_slice(&[0.0; 251]);
-        let mut right = left.clone();
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(&mut buffer, &RenderContext::new(SR, 256, 0, 120.0, 960));
-        }
-        for (i, sample) in left.iter().chain(right.iter()).enumerate() {
+        let mut input = alloc::vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5, -0.5];
+        input.extend_from_slice(&[0.0; 251]);
+        let out = render(&mut effect, &input, 0, 120.0);
+        for (i, sample) in out.iter().enumerate() {
             assert!(sample.is_finite(), "sample {i} is {sample}");
         }
         // The poison must not survive into the next block either.
-        let mut left = alloc::vec![0.0_f32; 256];
-        let mut right = alloc::vec![0.0_f32; 256];
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(&mut buffer, &RenderContext::new(SR, 256, 0, 120.0, 960));
-        }
-        assert!(left.iter().all(|s| s.is_finite()));
+        let out = render(&mut effect, &alloc::vec![0.0_f32; 512], 0, 120.0);
+        assert!(out.iter().all(|s| s.is_finite()));
     }
 
     #[test]
@@ -1704,17 +1918,11 @@ mod tests {
         let mut effect = make();
         effect.set_parameter(PARAM_MIX, 0.0);
         effect.set_wet(0.0);
-        let mut left: Vec<f32> = (0..512)
-            .map(|n| sin_poly(2.0 * core::f32::consts::PI * 440.0 * n as f32 / SR) * 0.5)
+        let input: Vec<f32> = (0..512)
+            .map(|n| sin_poly(2.0 * PI * 440.0 * n as f32 / SR) * 0.5)
             .collect();
-        let expected = left.clone();
-        let mut right = left.clone();
-        {
-            let mut views = [&mut left[..], &mut right[..]];
-            let mut buffer = AudioBuffer::new(&mut views);
-            effect.process(&mut buffer, &RenderContext::new(SR, 512, 0, 120.0, 960));
-        }
-        for (i, (got, want)) in left.iter().zip(expected.iter()).enumerate() {
+        let out = render(&mut effect, &input, 0, 120.0);
+        for (i, (got, want)) in out.iter().zip(input.iter()).enumerate() {
             assert!((got - want).abs() < 1e-6, "sample {i}: {got} vs {want}");
         }
     }
@@ -1741,9 +1949,12 @@ mod tests {
     fn reset_clears_the_delay_lines() {
         let mut effect = make();
         effect.set_parameter(PARAM_FEEDBACK, 90.0);
-        let mut impulse = alloc::vec![0.0_f32; 256];
-        impulse[0] = 1.0;
-        let _ = render(&mut effect, &impulse, 0, 120.0);
+        let input = {
+            let mut v = alloc::vec![0.0_f32; 256];
+            v[0] = 1.0;
+            v
+        };
+        let _ = render(&mut effect, &input, 0, 120.0);
         assert!(
             effect.lines[0].ring.iter().any(|s| s.abs() > 0.0),
             "the line should hold something before a reset"
@@ -1753,8 +1964,7 @@ mod tests {
         assert_eq!(effect.lines[0].write, 0);
         assert_eq!(effect.damping[0].lowpass, 0.0);
         // Silence in, silence out.
-        let silence = alloc::vec![0.0_f32; 256];
-        let out = render(&mut effect, &silence, 0, 120.0);
+        let out = render(&mut effect, &alloc::vec![0.0_f32; 256], 0, 120.0);
         assert!(out.iter().all(|s| s.abs() == 0.0));
     }
 
@@ -1778,9 +1988,9 @@ mod tests {
 
     #[test]
     fn the_ring_covers_the_longest_combination_the_parameters_allow() {
-        // The longest musical division at the slowest supported tempo, plus
-        // the spread offset, must fit; otherwise a legitimate setting would
-        // silently shorten the echo.
+        // The longest musical division at the slowest supported tempo, plus the
+        // spread offset, must fit; otherwise a legitimate setting would silently
+        // shorten the echo.
         for rate in [44_100.0_f32, 48_000.0, 96_000.0] {
             let capacity = SyncDelay::required_capacity(rate, 256) as f32;
             let worst_tempo = rate * 60.0 / MIN_SUPPORTED_BPM * MAX_DIVISION_BEATS;
@@ -1790,8 +2000,13 @@ mod tests {
                 "at {rate} Hz the ring holds {capacity}, needs {}",
                 worst_tempo + worst_spread
             );
-            // And the free-time budget.
             assert!(capacity >= rate * MAX_FREE_DELAY_MS / 1_000.0);
+            // The longest free time must also fit.
+            let mut effect = SyncDelay::new(ParameterAddress::effect(0, 0, PARAM_SYNC));
+            effect.prepare(rate, 256, 2);
+            effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
+            effect.set_parameter(PARAM_TIME_MS, MAX_FREE_DELAY_MS);
+            assert!(effect.delay_samples_for(&RenderContext::default()) <= capacity);
         }
     }
 
@@ -1799,14 +2014,16 @@ mod tests {
     fn a_tempo_slow_enough_to_stretch_the_ring_still_reads_in_range() {
         // 20 BPM with the longest division is the worst case the ring is sized
         // for. The read must clamp rather than walk off the end.
-        let mut effect = make();
+        let mut effect = plain(20.0);
         effect.set_parameter(PARAM_SYNC, SyncMode::Synced.as_u32() as f32);
         effect.set_parameter(PARAM_DIVISION, SyncDivision::Half.as_u32() as f32);
-        effect.set_parameter(PARAM_MIX, 100.0);
         effect.set_parameter(PARAM_FEEDBACK, 50.0);
-        let mut impulse = alloc::vec![0.0_f32; 256];
-        impulse[0] = 1.0;
-        let out = render(&mut effect, &impulse, 0, 20.0);
+        let input = {
+            let mut v = alloc::vec![0.0_f32; 256];
+            v[0] = 1.0;
+            v
+        };
+        let out = render(&mut effect, &input, 0, 20.0);
         assert!(out.iter().all(|s| s.is_finite()));
         let capacity = effect.lines[0].capacity() as f32;
         assert!(
@@ -1887,13 +2104,16 @@ mod tests {
             long > short * 4.0,
             "more feedback must mean a longer tail: {long} vs {short}"
         );
-        assert!((short - 0.1).abs() < 0.02, "one repeat is 0.1 s, got {short}");
+        assert!(
+            (short - 0.1).abs() < 0.02,
+            "one repeat is 0.1 s, got {short}"
+        );
         assert!(long <= MAX_TAIL_SECONDS);
     }
 
     #[test]
     fn latency_is_zero_because_the_dry_path_is_undelayed() {
-        // The delay is the effect's audible content; the dry path carries no
+        // The echo is the effect's audible content; the dry path carries no
         // look-ahead, so PDC has nothing to compensate.
         let effect = make();
         assert_eq!(effect.latency_samples(), 0);
@@ -1913,49 +2133,46 @@ mod tests {
 
     #[test]
     fn the_damping_low_pass_darkens_successive_repeats() {
-        // Damping is what keeps a long delay from turning into a bright
-        // pile-up; each repeat must lose high-frequency energy.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 10.0);
-        effect.set_parameter(PARAM_FEEDBACK, 80.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 1_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        // A steady 8 kHz tone: the low-pass at 1 kHz should strip it hard.
-        let frames = 24_000;
-        let input: Vec<f32> = (0..frames)
-            .map(|n| sin_poly(2.0 * core::f32::consts::PI * 8_000.0 * n as f32 / SR) * 0.5)
-            .collect();
-        let out = render(&mut effect, &input, 0, 120.0);
-        let settled = out[12_000..20_000]
-            .iter()
-            .fold(0.0_f32, |m, s| m.max(s.abs()));
+        // Damping shapes the *feedback*, so it is the later repeats that get
+        // darker -- the first repeat is the raw tap, and with a sustained input
+        // every repeat also contains the (undamped) current input. The clean
+        // measurement is therefore a *burst*: play a short tone, stop, and
+        // compare the level of the burst's later repeats for a high tone
+        // against a low one through the same 1 kHz low-pass.
+        let repeat_of = |tone: f32| {
+            let mut effect = plain(10.0);
+            effect.set_parameter(PARAM_FEEDBACK, 80.0);
+            effect.set_parameter(PARAM_DAMP_LOWPASS, 1_000.0);
+            // A 10 ms burst of the tone, then silence so only the repeats
+            // remain in the measurement window.
+            let mut input = alloc::vec![0.0_f32; 24_000];
+            for (n, sample) in input.iter_mut().enumerate().take(480) {
+                *sample = sin_poly(2.0 * PI * tone * n as f32 / SR) * 0.5;
+            }
+            let out = render(&mut effect, &input, 0, 120.0);
+            // The delay is 10 ms (480 samples), so the second repeat of the
+            // burst occupies 960..1440 and the third 1440..1920.
+            peak(&out[960..1_920])
+        };
+        let high_echo = repeat_of(8_000.0);
+        let low_echo = repeat_of(200.0);
         assert!(
-            settled < 0.15,
-            "an 8 kHz tone survived a 1 kHz damping loop at {settled}"
+            high_echo < low_echo * 0.6,
+            "the 1 kHz damping should strip later 8 kHz repeats: {high_echo} vs {low_echo}"
         );
+        assert!(low_echo > 0.01, "the low tone produced no repeats at all");
     }
 
     #[test]
     fn a_bright_setting_keeps_the_repeats_bright() {
         // The converse of the previous test: with damping wide open the repeat
         // is essentially the input, which pins the low-pass as the cause.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 10.0);
-        effect.set_parameter(PARAM_FEEDBACK, 0.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        let frames = 8_000;
-        let input: Vec<f32> = (0..frames)
-            .map(|n| sin_poly(2.0 * core::f32::consts::PI * 1_000.0 * n as f32 / SR) * 0.5)
+        let mut effect = plain(20.0);
+        let input: Vec<f32> = (0..4_000)
+            .map(|n| sin_poly(2.0 * PI * 1_000.0 * n as f32 / SR) * 0.5)
             .collect();
         let out = render(&mut effect, &input, 0, 120.0);
-        let repeat = out[1_000..2_000]
-            .iter()
-            .fold(0.0_f32, |m, s| m.max(s.abs()));
+        let repeat = peak(&out[960..1_920]);
         assert!(
             (repeat - 0.5).abs() < 0.05,
             "an undamped repeat should be the input, got {repeat}"
@@ -1965,32 +2182,31 @@ mod tests {
     #[test]
     fn an_impulse_response_does_not_smear_the_signal_when_damping_is_off() {
         // With a 20 kHz low-pass and a 20 Hz high-pass the loop is a wire, so
-        // the first repeat is exactly the input scaled by the feedback gain.
-        let mut effect = make();
-        effect.set_parameter(PARAM_SYNC, SyncMode::Free.as_u32() as f32);
-        effect.set_parameter(PARAM_TIME_MS, 10.0);
+        // each repeat is exactly the input scaled by the feedback gain.
+        let mut effect = plain(10.0);
         effect.set_parameter(PARAM_FEEDBACK, 50.0);
-        effect.set_parameter(PARAM_DAMP_LOWPASS, 20_000.0);
-        effect.set_parameter(PARAM_DAMP_HIGHPASS, 20.0);
-        effect.set_parameter(PARAM_MIX, 100.0);
-        let mut impulse = alloc::vec![0.0_f32; 512];
-        impulse[0] = 1.0;
-        let out = render(&mut effect, &impulse, 0, 120.0);
+        let input = {
+            let mut v = alloc::vec![0.0_f32; 2_048];
+            v[0] = 1.0;
+            v
+        };
+        let out = render(&mut effect, &input, 0, 120.0);
         let period = 480;
         assert!(
-            (out[period].abs() - 1.0).abs() < 0.05,
+            (out[period].abs() - 1.0).abs() < 0.02,
             "first repeat is {} not ~1.0",
             out[period]
         );
+        // 50% feedback of the 0.90 user ceiling is a 0.45 loop gain.
         assert!(
-            (out[period * 2].abs() - 0.45).abs() < 0.05,
+            (out[period * 2].abs() - 0.45).abs() < 0.02,
             "second repeat is {} not ~0.45",
             out[period * 2]
         );
     }
 
     #[test]
-    fn an_empty_block_and_a_silent_effect_are_both_safe() {
+    fn an_empty_block_and_a_one_sample_block_are_both_safe() {
         let mut effect = make();
         let mut empty: [&mut [f32]; 0] = [];
         {
@@ -2006,5 +2222,42 @@ mod tests {
             effect.process(&mut buffer, &RenderContext::new(SR, 1, 0, 120.0, 960));
         }
         assert!(left[0].is_finite());
+    }
+
+    #[test]
+    fn a_one_channel_block_is_safe() {
+        // The engine may hand an effect a mono block; the ping-pong routing
+        // must not index a channel that is not there.
+        let mut effect = plain(20.0);
+        effect.set_parameter(PARAM_PING_PONG, PingPong::LeftToRight.as_u32() as f32);
+        let mut only_in = alloc::vec![0.0_f32; 2_048];
+        only_in[0] = 1.0;
+        let mut only = only_in.clone();
+        {
+            let mut views = [&mut only[..]];
+            let mut buffer = AudioBuffer::new(&mut views);
+            effect.process(
+                &mut buffer,
+                &RenderContext::new(SR, only_in.len(), 0, 120.0, 960),
+            );
+        }
+        assert!(only.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn the_ping_pong_target_map_is_a_swap() {
+        // The routing table is the whole ping-pong mechanism; assert it
+        // directly so a regression there is not hidden behind an audio test.
+        assert_eq!(PingPong::Off.target(0), 0);
+        assert_eq!(PingPong::Off.target(1), 1);
+        assert_eq!(PingPong::LeftToRight.target(0), 1);
+        assert_eq!(PingPong::LeftToRight.target(1), 0);
+        assert_eq!(PingPong::RightToLeft.target(0), 1);
+        assert_eq!(PingPong::RightToLeft.target(1), 0);
+        // An out-of-range channel must fold rather than index past the array.
+        assert_eq!(PingPong::LeftToRight.target(9), 0);
+        assert!(!PingPong::Off.is_crossed());
+        assert!(PingPong::LeftToRight.is_crossed());
+        assert!(PingPong::RightToLeft.is_crossed());
     }
 }

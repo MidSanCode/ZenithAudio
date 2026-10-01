@@ -1,7 +1,7 @@
 //! Flanger: a very short modulated delay with heavy feedback.
 //!
 //! Same family as [`super::chorus`], different sound. A flanger sweeps a delay
-//! of roughly 0.5–10 ms — short enough that the delayed copy sums with the dry
+//! of roughly 0.5-10 ms -- short enough that the delayed copy sums with the dry
 //! signal *coherently*, so instead of hearing a second voice the listener hears
 //! a comb: a series of notches evenly spaced in frequency. Sweeping the delay
 //! moves the notches, and that whoosh is the effect.
@@ -85,7 +85,7 @@ const MAX_FEEDBACK: f32 = 0.95;
 /// The low-pass corner inside the feedback loop, in hertz.
 ///
 /// Higher than the chorus's because a flanger's resonance lives further up the
-/// band — but still finite, so the round-trip gain falls with frequency.
+/// band -- but still finite, so the round-trip gain falls with frequency.
 const FEEDBACK_DAMPING_HZ: f32 = 12_000.0;
 
 /// The delay-line capacity, in milliseconds.
@@ -298,6 +298,10 @@ impl FlangerLine {
     /// A flanger's whole character comes from a delay that is a fraction of a
     /// sample long and moving; an integer read would quantise the sweep into
     /// steps and turn the resonance into a rattle.
+    ///
+    /// `process` calls this before writing the current frame, so the cursor
+    /// sits at the time of the frame being produced and the sample `d` frames
+    /// ago lives at `(cursor - d) mod len`.
     #[must_use]
     fn read(&self, delay_samples: f32) -> f32 {
         let capacity = self.capacity();
@@ -312,7 +316,7 @@ impl FlangerLine {
         };
         let whole = delay as usize;
         let fraction = delay - whole as f32;
-        let base = self.write + len - 1 - whole;
+        let base = self.write + len - whole;
         let first = self.ring[base % len];
         let second = self.ring[(base + len - 1) % len];
         first + (second - first) * fraction
@@ -535,8 +539,8 @@ impl EffectProcessor for Flanger {
                 self.dry[..frames].copy_from_slice(source);
             }
             // Sanitize the snapshot once per channel. A NaN that reached the
-            // delay line would never leave — it would sit in the ring and be
-            // re-read every period — so one bad sample would kill the effect.
+            // delay line would never leave -- it would sit in the ring and be
+            // re-read every period -- so one bad sample would kill the effect.
             for sample in self.dry[..frames].iter_mut() {
                 if !sample.is_finite() {
                     *sample = 0.0;
@@ -651,12 +655,9 @@ impl EffectProcessor for Flanger {
         // A flanger's comb decay is dominated by the feedback; the delay is
         // very short, so even a generous multiple of it keeps an offline bounce
         // bounded.
-        let longest = self
-            .last_delay_left
-            .max(self.last_delay_right)
-            .max(0.0)
-            / self.sample_rate.max(1.0);
-        (longest * 64.0).min(1.0).max(0.02)
+        let longest =
+            self.last_delay_left.max(self.last_delay_right).max(0.0) / self.sample_rate.max(1.0);
+        (longest * 64.0).clamp(0.02, 1.0)
     }
 }
 
@@ -871,11 +872,16 @@ mod tests {
 
     #[test]
     fn the_comb_notches_move_with_the_lfo() {
-        // The defining behaviour: the notches are not fixed. Probe the output
-        // energy at a single frequency at two different LFO phases; a static
-        // comb would give the same answer both times.
+        // The defining behaviour: the notches are not fixed. Feed a steady tone
+        // and track its level over time. With a swept comb the tone is
+        // alternately passed and cancelled, so the *short-window* level swings
+        // widely; a static comb would hold one level forever.
+        //
+        // Short sub-windows matter here. Averaging 2 000 samples at 1 kHz
+        // covers forty tone periods, which is long enough to span both the
+        // notch and the peak of one sweep position and wash the movement out.
         let mut effect = make();
-        effect.set_parameter(PARAM_RATE, 0.5);
+        effect.set_parameter(PARAM_RATE, 4.0);
         effect.set_parameter(PARAM_DEPTH, 100.0);
         effect.set_parameter(PARAM_DELAY_MS, 5.0);
         effect.set_parameter(PARAM_FEEDBACK, 0.0);
@@ -884,12 +890,22 @@ mod tests {
         let probe = 1_000.0_f32;
         let input = tone(24_000, probe);
         let (left, _) = run(&mut effect, &input);
-        // Two windows half a cycle of the 0.5 Hz LFO apart (one second).
-        let a = rms(&left, 2_000, 6_000);
-        let b = rms(&left, 14_000, 18_000);
+
+        // One cycle of the 4 Hz LFO is 12 000 samples; a 512-sample window is
+        // short enough to sit at a near-constant LFO phase.
+        let mut lowest = f32::MAX;
+        let mut highest = 0.0_f32;
+        let mut start = 4_000;
+        while start + 512 <= 22_000 {
+            let level = rms(&left, start, start + 512);
+            lowest = lowest.min(level);
+            highest = highest.max(level);
+            start += 512;
+        }
+        assert!(highest > 0.0, "the flanger produced no output at all");
         assert!(
-            (a - b).abs() > 0.005,
-            "the comb did not move: {a} then {b} at {probe} Hz"
+            highest > lowest * 1.5,
+            "the comb did not move at {probe} Hz: level stayed between {lowest} and {highest}"
         );
     }
 
@@ -953,7 +969,9 @@ mod tests {
             assert!(ms >= MIN_DELAY_MS - 1e-3, "delay {ms} at lfo {lfo}");
             assert!(ms <= MAX_DELAY_MS + 1e-3);
         }
-        assert!(effect.lines[0].read(effect.ms_to_samples(-100.0)).is_finite());
+        assert!(effect.lines[0]
+            .read(effect.ms_to_samples(-100.0))
+            .is_finite());
     }
 
     #[test]
@@ -1067,8 +1085,9 @@ mod tests {
             for (i, sample) in left.iter().chain(right.iter()).enumerate() {
                 assert!(sample.is_finite(), "{polarity:?} sample {i} is {sample}");
             }
-            let energy =
-                |from: usize, to: usize| -> f32 { left[from..to].iter().map(|s| s * s).sum::<f32>() };
+            let energy = |from: usize, to: usize| -> f32 {
+                left[from..to].iter().map(|s| s * s).sum::<f32>()
+            };
             let early = energy(0, 12_000);
             let late = energy(36_000, 48_000);
             assert!(late < early, "{polarity:?} tail grew: {early} then {late}");
@@ -1121,7 +1140,10 @@ mod tests {
         let input = tone(12_000, 500.0);
         let (left, right) = run(&mut effect, &input);
         let difference = (4_000..12_000).fold(0.0_f32, |m, i| m.max((left[i] - right[i]).abs()));
-        assert!(difference > 1e-3, "the channels are identical: {difference}");
+        assert!(
+            difference > 1e-3,
+            "the channels are identical: {difference}"
+        );
 
         // With no spread they must match exactly.
         let mut effect = make();

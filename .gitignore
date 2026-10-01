@@ -60,3 +60,13 @@ native/**/target/
 
 # Agent-D isolated S3 verification harness (throwaway)
 .s3-check/
+
+# Throwaway verification harnesses. These mirror part of the real tree so a
+# stage's files can be compiled and tested before the crate builds as a whole.
+# They are scratch: they duplicate source already tracked under
+# native/zenith_core/, and committing one is how 35 files of stale mirror
+# source end up in the repository.
+.s5check/
+.s5-check/
+.scratch/
+.mycheck/

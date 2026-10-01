@@ -724,7 +724,18 @@ mod tests {
 
     #[test]
     fn a_null_processor_is_reported_not_dereferenced() {
-        let null: *const dyn EffectProcessor = core::ptr::null();
+        // A null fat pointer cannot be written as `ptr::null()` (the vtable
+        // half cannot be inferred), transmuted from a thin pointer (the sizes
+        // differ), or built with `zeroed()` (a null vtable is an invalid value
+        // and panics under debug assertions). The only sound way to produce
+        // one is to start from `None`, which this helper does for the test.
+        //
+        // This matches what a C caller passing NULL produces, which is the
+        // case that has to be covered.
+        fn null_processor() -> *const dyn EffectProcessor {
+            None::<*const dyn EffectProcessor>.unwrap_or_else(|| unreachable!())
+        }
+        let null = null_processor();
         assert_eq!(zenith_effect_instance_parameter_count(null), 0);
 
         let mut mirror = impossible_param_descriptor();

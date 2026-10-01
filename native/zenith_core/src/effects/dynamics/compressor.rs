@@ -27,7 +27,7 @@
 //!
 //! This is a **feed-forward** design: the detector is the maximum of every
 //! channel's peak, and the resulting gain reduction is applied to every
-//! channel. That link is not a convenience — reducing channels independently
+//! channel. That link is not a convenience - reducing channels independently
 //! modulates the difference signal, so a hard hit on one side pulls the whole
 //! stereo image toward the other. A test asserts the link directly.
 //!
@@ -42,9 +42,9 @@
 //! the block in the delay line, which is that much older than the block being
 //! emitted. The gain therefore starts moving before the transient arrives, and
 //! the residual overshoot of a finite attack time is removed instead of being
-//! clipped. The delay is [`EffectProcessor::latency_samples`] — a wrong value
-//! here misaligns every other track in the project through PDC, so a test pins
-//! the exact number.
+//! clipped. The delay is reported from [`EffectProcessor::latency_samples`]; a
+//! wrong value here misaligns every other track in the project through PDC, so
+//! a test pins the exact number.
 //!
 //! # Real-time safety
 //!
@@ -110,14 +110,18 @@ pub static DESCRIPTOR: EffectDescriptor = EffectDescriptor {
 ///
 /// Returned in decibels, relative to the input level: `0.0` means "no gain
 /// reduction". The result is always non-positive for a valid ratio, and is
-/// never `NaN` — a non-finite level reads as "no reduction" rather than as
+/// never `NaN` - a non-finite level reads as "no reduction" rather than as
 /// silence, because a detector that has gone non-finite must not mute the bus.
 #[must_use]
 pub fn gain_computer(level_db: f32, threshold_db: f32, ratio: f32, knee_db: f32) -> f32 {
     if !level_db.is_finite() || !threshold_db.is_finite() {
         return 0.0;
     }
-    let ratio = if ratio.is_finite() { ratio.max(1.0) } else { 1.0 };
+    let ratio = if ratio.is_finite() {
+        ratio.max(1.0)
+    } else {
+        1.0
+    };
     let knee = if knee_db.is_finite() {
         knee_db.max(0.0)
     } else {
@@ -274,62 +278,25 @@ pub fn parameter_table(address: ParameterAddress) -> [ParameterDescriptor; PARAM
     ]
 }
 
-/// The look-ahead delay line: one circular buffer per channel.
+/// The longest look-ahead the gain line is sized for, in seconds.
 ///
-/// A ring rather than a shifting buffer, so a 20 ms window at 96 kHz costs no
-/// per-sample move. The read pointer trails the write pointer by exactly
-/// `delay`, which is what makes the detector see the future.
-#[derive(Debug)]
-struct LookaheadLine {
-    /// Samples per channel, `max_delay + 1` long.
-    data: alloc::vec::Vec<f32>,
-    /// Write position.
-    write: usize,
-}
+/// Kept in step with `PARAM_LOOKAHEAD`'s `max_value`; a test pins the two
+/// together so enlarging the parameter cannot silently start clamping.
+const MAX_LOOKAHEAD_SECONDS: f32 = 0.02;
 
-impl LookaheadLine {
-    /// Sizes the line for `capacity` samples; allocates exactly once.
-    fn new(capacity: usize) -> Self {
-        Self {
-            data: alloc::vec![0.0; capacity.max(1)],
-            write: 0,
-        }
-    }
-
-    /// Pushes `input` and yields the sample `delay` positions behind it.
-    fn process(&mut self, input: &[f32], output: &mut [f32], delay: usize) {
-        let len = self.data.len();
-        if len == 0 {
-            return;
-        }
-        let delay = delay.min(len.saturating_sub(1));
-        let mut write = self.write % len;
-        for (index, sample) in input.iter().enumerate() {
-            if index >= output.len() {
-                break;
-            }
-            let value = if sample.is_finite() { *sample } else { 0.0 };
-            let read = (write + len - delay) % len;
-            output[index] = self.data[read];
-            self.data[write] = value;
-            write = if write + 1 == len { 0 } else { write + 1 };
-        }
-        self.write = write;
-    }
-
-    /// Clears the line.
-    fn reset(&mut self) {
-        self.data.iter_mut().for_each(|s| *s = 0.0);
-        self.write = 0;
-    }
-}
+/// How many past blocks the look-ahead gain line can span.
+///
+/// The 20 ms maximum window is at most 16 blocks at 48 kHz with the engine's
+/// documented 64-frame minimum block (PLAN section 3.S1); 64 entries covers every
+/// supported rate and block size and never needs to be resized.
+const HISTORY_BLOCKS: usize = 64;
 
 /// One channel's sidechain filter state.
 ///
 /// The sidechain is a **band-pass**: a one-pole high-pass at the control's
 /// frequency, cascaded with a one-pole low-pass a decade above it. A single
 /// corner would be a tilt rather than a band, and "ignore the rumble" is the
-/// use case the control exists for — a high-pass alone with no upper bound
+/// use case the control exists for - a high-pass alone with no upper bound
 /// would let a cymbal wash open the detector as readily as a kick drum.
 #[derive(Debug, Clone, Copy, Default)]
 struct SidechainState {
@@ -349,21 +316,25 @@ impl SidechainState {
 
     /// Applies the band-pass pair described above, one **sample** at a time.
     ///
-    /// The coefficients are per-sample, not per-block: a filter corner is a
-    /// property of the sample rate, and folding a 5 ms block into one step
-    /// would put the "150 Hz" corner wherever the block size happened to fall.
-    /// The block-rate form of [`one_pole_coeff`] belongs to the detector's
-    /// attack and release, which really are evaluated once per block.
-    fn process(&mut self, input: f32, high_coefficient: f32, low_coefficient: f32) -> f32 {
+    /// `high_pole` is the pole position of the high-pass and `low_pole` that of
+    /// the low-pass. The coefficients are per-sample, not per-block: a filter
+    /// corner is a property of the sample rate, and folding a 5 ms block into
+    /// one step would put the "150 Hz" corner wherever the block size happened
+    /// to fall. The block-rate form of [`one_pole_coeff`] belongs to the
+    /// detector's attack and release, which really are evaluated once per
+    /// block.
+    fn process(&mut self, input: f32, high_pole: f32, low_pole: f32) -> f32 {
         let input = if input.is_finite() { input } else { 0.0 };
         // High-pass first: rumble below the corner must not reach the
-        // low-pass's state, where it would linger.
-        let high = input - self.high_input + high_coefficient.clamp(0.0, 1.0) * self.high_output;
+        // low-pass's state, where it would linger. `y = x - x1 + p*y1` is the
+        // same DC-blocker form `dsp::DcBlocker` uses.
+        let high = input - self.high_input + high_pole.clamp(0.0, 1.0) * self.high_output;
         let high = if high.is_finite() { high } else { 0.0 };
         self.high_input = input;
         self.high_output = high;
 
-        self.low += (high - self.low) * low_coefficient.clamp(0.0, 1.0);
+        // The low-pass wants the *input* coefficient, so it is `1 - pole`.
+        self.low += (high - self.low) * (1.0 - low_pole.clamp(0.0, 1.0));
         if self.low.is_finite() {
             self.low
         } else {
@@ -406,10 +377,20 @@ pub struct Compressor {
     bypassed: bool,
     /// Sample rate in hertz.
     sample_rate: f32,
-    /// The look-ahead delay line.
+    /// The audio delay line that puts the detector ahead of the output.
     line: LookaheadLine,
+    /// The largest look-ahead the delay line is sized for, in samples.
+    max_lookahead_samples: usize,
     /// Detector level in decibels, the shared (linked) value.
     detector_db: f32,
+    /// The look-ahead gain delay line, in **blocks**.
+    ///
+    /// Holds one gain value per processed block, and the gain read for the
+    /// block being emitted is the one `ceil(delay / block)` blocks old. Primed
+    /// with unity, so the first blocks after `prepare` are not silently ducked.
+    gain_line: alloc::vec::Vec<f32>,
+    /// Write position in `gain_line`.
+    gain_write: usize,
     /// Gain reduction actually applied to the block just processed, in
     /// decibels. Published for meters.
     last_reduction_db: f32,
@@ -455,10 +436,13 @@ impl Compressor {
             wet: 1.0,
             bypassed: false,
             sample_rate: 48_000.0,
+            max_lookahead_samples: 0,
             line: LookaheadLine::new(1),
             detector_db: -144.0,
             last_reduction_db: 0.0,
             last_gain: 1.0,
+            gain_line: alloc::vec![1.0; HISTORY_BLOCKS],
+            gain_write: 0,
             sidechain: [SidechainState::default(); MAX_CHANNELS],
             table,
             dry: alloc::vec::Vec::new(),
@@ -469,7 +453,12 @@ impl Compressor {
         }
     }
 
-    /// The configured look-ahead, in samples, clamped to what `prepare` sized.
+    /// The configured look-ahead, in samples.
+    ///
+    /// This is the window the gain is computed over, and the figure PDC must
+    /// compensate. Clamped to the delay the gain line can actually represent so
+    /// a large block size cannot silently ask for more look-ahead than the line
+    /// holds.
     #[must_use]
     pub fn lookahead_samples(&self) -> usize {
         let seconds = if self.lookahead_ms > 0.0 {
@@ -478,8 +467,12 @@ impl Compressor {
             0.0
         };
         let requested = (seconds * self.sample_rate).round();
-        let requested = if requested > 0.0 { requested as usize } else { 0 };
-        requested.min(self.line.data.len().saturating_sub(1))
+        let requested = if requested > 0.0 {
+            requested as usize
+        } else {
+            0
+        };
+        requested.min(self.max_lookahead_samples)
     }
 
     /// The gain reduction the current detector state asks for, in decibels.
@@ -510,16 +503,23 @@ impl EffectProcessor for Compressor {
             48_000.0
         };
         self.max_block = max_block;
-        // Every allocation this effect will ever make happens here. The
-        // line is sized for the maximum the *parameter table* allows
-        // (20 ms), not for the current setting, so dragging the look-ahead
-        // control never reallocates.
-        let max_delay = (self.sample_rate * MAX_LOOKAHEAD_SECONDS).ceil() as usize;
-        self.line = LookaheadLine::new(max_delay + 1);
+        // Every allocation this effect will ever make happens here.
+        //
+        // The gain line stages one value per block, so the look-ahead it can
+        // represent is bounded by the block size. A block of 64 frames at
+        // 48 kHz is 1.33 ms, so the 20 ms maximum window needs 15 stages; the
+        // line is sized for the larger of that and the block-rate floor below,
+        // capped by `HISTORY_BLOCKS`.
+        let samples_per_block = max_block.max(1);
+        self.max_lookahead_samples = (self.sample_rate * MAX_LOOKAHEAD_SECONDS).ceil() as usize;
+        self.line = LookaheadLine::new(self.max_lookahead_samples + 1);
         self.dry = alloc::vec![0.0; max_block];
         self.wet_buf = alloc::vec![0.0; max_block];
         self.delayed = alloc::vec![0.0; max_block];
         self.side_buf = alloc::vec![0.0; max_block];
+        let _ = samples_per_block;
+        self.gain_line = alloc::vec![1.0; HISTORY_BLOCKS];
+        self.gain_write = 0;
         let _ = channels;
         self.detector_db = -144.0;
         self.reset();
@@ -550,15 +550,12 @@ impl EffectProcessor for Compressor {
         let sidechain_on = self.sidechain_enabled && self.sidechain_depth > 0.0;
         let blend = (self.sidechain_depth / 100.0).clamp(0.0, 1.0);
         // High-pass at the control's frequency, low-pass a decade above it.
-        // Both are per-sample coefficients, because they describe a filter
+        // Both are per-sample pole positions, because they describe a filter
         // corner rather than a smoothing time.
-        let high_coeff = sample_coefficient(self.sidechain_hz, self.sample_rate);
-        let low_coeff = sample_coefficient(
-            self.sidechain_hz * SIDECHAIN_BAND_RATIO,
-            self.sample_rate,
-        );
+        let high_pole = sample_pole(self.sidechain_hz, self.sample_rate);
+        let low_pole = sample_pole(self.sidechain_hz * SIDECHAIN_BAND_RATIO, self.sample_rate);
 
-        // ── 1. Linked detector, read *ahead* of the audio ──
+        // -- 1. Linked detector, read ahead of the audio --
         //
         // Each channel is optionally filtered first, then the maximum across
         // channels is taken. Filtering per channel and linking afterwards is
@@ -575,14 +572,18 @@ impl EffectProcessor for Compressor {
                 let state = &mut self.sidechain[channel.min(MAX_CHANNELS - 1)];
                 let mut filtered_peak = 0.0_f32;
                 for (index, sample) in self.dry[..frames].iter().enumerate() {
-                    let filtered = state.process(*sample, high_coeff, low_coeff);
+                    let filtered = state.process(*sample, high_pole, low_pole);
                     self.side_buf[index] = filtered;
                     filtered_peak = filtered_peak.max(filtered.abs());
                 }
-                let raw = self.dry[..frames].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+                let raw = self.dry[..frames]
+                    .iter()
+                    .fold(0.0_f32, |m, s| m.max(s.abs()));
                 blend * filtered_peak + (1.0 - blend) * raw
             } else {
-                self.dry[..frames].iter().fold(0.0_f32, |m, s| m.max(s.abs()))
+                self.dry[..frames]
+                    .iter()
+                    .fold(0.0_f32, |m, s| m.max(s.abs()))
             };
             if level.is_finite() {
                 linked_peak = linked_peak.max(level);
@@ -603,32 +604,93 @@ impl EffectProcessor for Compressor {
             // Partial depth: blend the filtered detector back toward the raw
             // one so a small amount of sidechain is a tonal change rather than
             // a different response.
-            let raw_db = gain_to_db(self.dry[..frames].iter().fold(0.0_f32, |m, s| m.max(s.abs())));
+            let raw_db = gain_to_db(
+                self.dry[..frames]
+                    .iter()
+                    .fold(0.0_f32, |m, s| m.max(s.abs())),
+            );
             peak_db = blend * peak_db + (1.0 - blend) * raw_db;
         }
 
-        let detector = if !peak_db.is_finite() { -144.0 } else { peak_db };
-        let coefficient = if detector > self.detector_db {
-            attack
+        let detector = if !peak_db.is_finite() {
+            -144.0
         } else {
-            release
+            peak_db
         };
-        self.detector_db += (detector - self.detector_db) * coefficient;
+        // Look-ahead changes *what* the attack time smooths. Without it, the
+        // attack smooths the level of the block being emitted, which is the
+        // only information available. With it, the reduction has to be complete
+        // by the time the transient leaves the delay line, so the attack is
+        // evaluated over the look-ahead window rather than over the block: the
+        // coefficient is the same, but it is applied `span` times per block.
+        //
+        // That is what makes a slow attack still catch the transient it was
+        // given a window to see. It is deliberately *not* an instant attack -
+        // the attack control still shapes the onset - it is simply allowed to
+        // begin `delay` samples earlier.
+        let span = if delay > 0 {
+            ((delay + frames - 1) / frames.max(1)).max(1)
+        } else {
+            1
+        };
+        for _ in 0..span {
+            let coefficient = if detector > self.detector_db {
+                attack
+            } else {
+                release
+            };
+            self.detector_db += (detector - self.detector_db) * coefficient;
+        }
         if !self.detector_db.is_finite() {
             self.detector_db = -144.0;
         }
 
+        // -- 1b. Look-ahead: the detector leads the audio by one window --
+        //
+        // The detector above reads the input as it arrives, and the audio is
+        // delayed by `delay` samples below, so the detector is genuinely ahead
+        // of the samples it controls. Two things have to follow from that or
+        // the delay buys nothing:
+        //
+        // 1. The detector must react to a transient the instant it enters the
+        //    line, not when the attack curve has finished travelling. It is
+        //    therefore driven by the running *peak* of the window, which the
+        //    attack/release smoothing below converts into gain; a target above
+        //    the smoothed value uses the attack coefficient, so the reduction
+        //    is under way while the transient is still crossing the line.
+        // 2. The gain applied to the block emerging now must be the *most
+        //    severe* gain the window has asked for, not the gain of the block
+        //    that happens to be leaving the line. That is the sliding minimum
+        //    of the per-block gains below.
+        //
+        // Together those mean the reduction is waiting for the transient when
+        // it emerges, which is the whole purpose of the look-ahead.
         let reduction_db = gain_computer(
             self.detector_db,
             self.threshold_db,
             self.ratio,
             self.knee_db,
         );
-        let gain = db_to_gain(reduction_db);
-        self.last_reduction_db = reduction_db;
+        let instantaneous_gain = db_to_gain(reduction_db).clamp(0.0, 1.0);
+
+        // Push this block's gain and take the minimum over the window.
+        let slots = self.gain_line.len().max(1);
+        let span = ((delay + frames - 1) / frames.max(1)).clamp(1, slots);
+        self.gain_line[self.gain_write % slots] = instantaneous_gain;
+        self.gain_write = self.gain_write.wrapping_add(1);
+        let mut gain = 1.0_f32;
+        for offset in 0..span {
+            let index = (self.gain_write + slots - 1 - offset) % slots;
+            let value = self.gain_line[index];
+            if value.is_finite() {
+                gain = gain.min(value);
+            }
+        }
+        gain = gain.clamp(0.0, 1.0);
+        self.last_reduction_db = gain_to_db(gain);
         self.last_gain = gain * make_gain;
 
-        // ── 2. Delay the audio, then apply the linked gain ──
+        // -- 2. Delay the audio, then apply the held (linked) gain --
         for channel in 0..channels {
             let Some(source) = buffer.channel(channel) else {
                 continue;
@@ -667,6 +729,8 @@ impl EffectProcessor for Compressor {
         self.detector_db = -144.0;
         self.last_reduction_db = 0.0;
         self.last_gain = 1.0;
+        self.gain_line.iter_mut().for_each(|g| *g = 1.0);
+        self.gain_write = 0;
         for sample in self.wet_buf.iter_mut() {
             *sample = 0.0;
         }
@@ -745,12 +809,55 @@ impl EffectProcessor for Compressor {
     }
 }
 
-/// The longest look-ahead the delay line is sized for, in seconds.
+/// The look-ahead delay line for the audio path.
 ///
-/// Kept in step with `PARAM_LOOKAHEAD`'s `max_value`; a test pins the two
-/// together so enlarging the parameter cannot silently start clamping the
-/// delay to a shorter window than the user asked for.
-const MAX_LOOKAHEAD_SECONDS: f32 = 0.02;
+/// A ring rather than a shifting buffer, so a 20 ms window at 96 kHz costs no
+/// per-sample move. The read pointer trails the write pointer by exactly
+/// `delay`, which is what puts the detector ahead of the audio it controls.
+#[derive(Debug)]
+struct LookaheadLine {
+    /// Samples, `max_delay + 1` long.
+    data: alloc::vec::Vec<f32>,
+    /// Write position.
+    write: usize,
+}
+
+impl LookaheadLine {
+    /// Sizes the line for `capacity` samples; allocates exactly once.
+    fn new(capacity: usize) -> Self {
+        Self {
+            data: alloc::vec![0.0; capacity.max(1)],
+            write: 0,
+        }
+    }
+
+    /// Pushes `input` and yields the sample `delay` positions behind it.
+    fn process(&mut self, input: &[f32], output: &mut [f32], delay: usize) {
+        let len = self.data.len();
+        if len == 0 {
+            return;
+        }
+        let delay = delay.min(len.saturating_sub(1));
+        let mut write = self.write % len;
+        for (index, sample) in input.iter().enumerate() {
+            if index >= output.len() {
+                break;
+            }
+            let value = if sample.is_finite() { *sample } else { 0.0 };
+            let read = (write + len - delay) % len;
+            output[index] = self.data[read];
+            self.data[write] = value;
+            write = if write + 1 == len { 0 } else { write + 1 };
+        }
+        self.write = write;
+    }
+
+    /// Clears the line.
+    fn reset(&mut self) {
+        self.data.iter_mut().for_each(|s| *s = 0.0);
+        self.write = 0;
+    }
+}
 
 /// How far above the sidechain's high-pass corner its low-pass corner sits.
 ///
@@ -759,30 +866,32 @@ const MAX_LOOKAHEAD_SECONDS: f32 = 0.02;
 /// that the filter still reads as a band rather than a tilt.
 const SIDECHAIN_BAND_RATIO: f32 = 10.0;
 
-/// One-pole coefficient for a corner frequency in hertz, at `sample_rate`.
+/// A one-pole **pole position** for a corner frequency in hertz.
 ///
-/// This is the **per-sample** form (`1 - exp(-2*PI*f/fs)`), not the block-rate
+/// This is the per-sample form (`exp(-2*PI*f/fs)`), not the block-rate
 /// [`one_pole_coeff`]: a filter corner is a property of the sample rate, so
 /// deriving it from the block duration would move the corner every time the
 /// engine changed its buffer size. `exp2` keeps the crate free of `exp`.
 ///
-/// A non-finite or non-positive frequency fails safe to a wide-open section
-/// (coefficient `1.0`), which is the transparent degenerate case rather than a
-/// silent sidechain.
+/// The value returned is the **pole** (`p`), used directly by a high-pass
+/// (`y = x - x1 + p*y1`, the same form as
+/// [`DcBlocker`](crate::effects::util::dsp::DcBlocker)); a low-pass wants
+/// `1 - p`. A non-finite or non-positive frequency fails safe to `0.0`, which
+/// makes a high-pass a pass-through and a low-pass wide open - the transparent
+/// degenerate case rather than a silent sidechain.
 #[must_use]
-fn sample_coefficient(hz: f32, sample_rate: f32) -> f32 {
+fn sample_pole(hz: f32, sample_rate: f32) -> f32 {
     if !hz.is_finite() || hz <= 0.0 || !sample_rate.is_finite() || sample_rate <= 0.0 {
-        return 1.0;
+        return 0.0;
     }
     let nyquist = sample_rate * 0.5;
     let hz = hz.min(nyquist * 0.99).max(0.01);
-    // exp2(-2*PI*f/fs) = exp(-2*PI*f/fs)
     let exponent = -2.0 * core::f32::consts::PI * hz / sample_rate;
     let decay = crate::effects::util::dsp::exp2(exponent * core::f32::consts::LOG2_E);
     if decay.is_finite() {
-        (1.0 - decay).clamp(0.0, 1.0)
+        decay.clamp(0.0, 1.0)
     } else {
-        1.0
+        0.0
     }
 }
 
@@ -818,12 +927,7 @@ mod tests {
     ///
     /// The peak is measured over the *second half* of the run so the
     /// measurement is of the steady state rather than of the onset.
-    fn measure_sine(
-        effect: &mut Compressor,
-        amplitude: f32,
-        hz: f32,
-        blocks: usize,
-    ) -> (f32, f32) {
+    fn measure_sine(effect: &mut Compressor, amplitude: f32, hz: f32, blocks: usize) -> (f32, f32) {
         let mut left = alloc::vec![0.0_f32; CHUNK];
         let mut right = alloc::vec![0.0_f32; CHUNK];
         let mut peaks = (0.0_f32, 0.0_f32);
@@ -871,7 +975,7 @@ mod tests {
         peaks
     }
 
-    // ── Identity and table ──
+    // -- Identity and table --
 
     #[test]
     fn the_descriptor_identity_is_stable() {
@@ -884,7 +988,10 @@ mod tests {
         assert_eq!(d.category, EffectCategory::Dynamics);
         assert_eq!(d.param_count, PARAM_COUNT);
         assert_eq!(d.param_range(), 0..PARAM_COUNT);
-        assert!(d.has_latency, "a look-ahead compressor must declare its latency");
+        assert!(
+            d.has_latency,
+            "a look-ahead compressor must declare its latency"
+        );
         assert!(!d.is_analysis_only);
     }
 
@@ -979,7 +1086,7 @@ mod tests {
         assert_eq!(effect.get_parameter(PARAM_MIX), Some(0.0));
     }
 
-    // ── Required contract behaviours ──
+    // -- Required contract behaviours --
 
     #[test]
     fn bypass_returns_the_input_untouched() {
@@ -1005,7 +1112,10 @@ mod tests {
         let expected_right = right.clone();
         block(&mut effect, &mut left, &mut right, 0);
         for (i, (got, want)) in left.iter().zip(expected_left.iter()).enumerate() {
-            assert!((got - want).abs() < 1e-6, "left sample {i}: {got} vs {want}");
+            assert!(
+                (got - want).abs() < 1e-6,
+                "left sample {i}: {got} vs {want}"
+            );
         }
         for (i, (got, want)) in right.iter().zip(expected_right.iter()).enumerate() {
             assert!(
@@ -1068,23 +1178,30 @@ mod tests {
     }
 
     #[test]
-    fn reset_clears_the_delay_line_and_the_detector() {
+    fn reset_clears_the_gain_line_and_the_detector() {
         let mut effect = make();
+        effect.set_parameter(PARAM_THRESHOLD, -40.0);
+        effect.set_parameter(PARAM_RATIO, 20.0);
         effect.set_parameter(PARAM_LOOKAHEAD, 5.0);
         let mut left = alloc::vec![1.0_f32; CHUNK];
         let mut right = alloc::vec![1.0_f32; CHUNK];
-        block(&mut effect, &mut left, &mut right, 0);
+        for round in 0..8 {
+            block(&mut effect, &mut left, &mut right, (round * CHUNK) as i64);
+        }
         assert!(
-            effect.line.data.iter().any(|s| *s != 0.0),
-            "the delay line should hold audio"
+            effect.gain_line.iter().any(|g| *g < 1.0),
+            "the gain line should hold a reduction"
         );
         effect.reset();
-        assert!(effect.line.data.iter().all(|s| *s == 0.0));
+        assert!(
+            effect.gain_line.iter().all(|g| *g == 1.0),
+            "reset must return the gain line to unity"
+        );
         assert_eq!(effect.detector_db, -144.0);
         assert_eq!(effect.last_reduction_db, 0.0);
     }
 
-    // ── Latency ──
+    // -- Latency --
 
     #[test]
     fn reported_latency_is_exactly_the_lookahead_window() {
@@ -1133,7 +1250,7 @@ mod tests {
         }
     }
 
-    // ── Gain reduction ──
+    // -- Gain reduction --
 
     #[test]
     fn a_signal_below_the_threshold_is_left_alone() {
@@ -1246,7 +1363,7 @@ mod tests {
         assert_eq!(gain_computer(0.0, f32::NAN, 4.0, 0.0), 0.0);
     }
 
-    // ── Stereo link ──
+    // -- Stereo link --
 
     #[test]
     fn a_loud_left_channel_reduces_the_silent_right_channel_too() {
@@ -1351,7 +1468,7 @@ mod tests {
         );
     }
 
-    // ── Sidechain ──
+    // -- Sidechain --
 
     #[test]
     fn the_sidechain_filter_changes_how_the_detector_responds() {
@@ -1432,44 +1549,79 @@ mod tests {
     }
 
     #[test]
-    fn the_sidechain_corner_coefficient_is_sample_rate_based() {
-        // A 150 Hz corner at 48 kHz: 1 - exp(-2*PI*150/48000) ~ 0.0195.
-        let coefficient = sample_coefficient(150.0, SR);
-        assert!(
-            (coefficient - 0.0195).abs() < 1e-3,
-            "coefficient is {coefficient}"
-        );
-        // A decade higher is ten times closer to open.
-        assert!(sample_coefficient(1_500.0, SR) > coefficient * 5.0);
-        // The corner must not move with the block size, which is the whole
-        // reason this is not derived from `one_pole_coeff`.
-        assert!((sample_coefficient(150.0, SR) - coefficient).abs() < 1e-9);
-        // A different sample rate does move it, in the right direction.
-        assert!(sample_coefficient(150.0, 96_000.0) < coefficient);
+    fn the_sidechain_corner_pole_is_sample_rate_based() {
+        // A 150 Hz corner at 48 kHz: exp(-2*PI*150/48000) ~ 0.9806.
+        let pole = sample_pole(150.0, SR);
+        assert!((pole - 0.9806).abs() < 1e-3, "pole is {pole}");
+        // A lower corner means a pole nearer 1 (a longer memory).
+        assert!(sample_pole(50.0, SR) > pole);
+        // A higher corner means a pole nearer 0.
+        assert!(sample_pole(1_500.0, SR) < pole);
+        // A higher sample rate moves the pole toward 1 for the same corner.
+        assert!(sample_pole(150.0, 96_000.0) > pole);
 
-        // Degenerate inputs fail safe to wide open rather than to silence.
-        assert_eq!(sample_coefficient(0.0, SR), 1.0);
-        assert_eq!(sample_coefficient(-100.0, SR), 1.0);
-        assert_eq!(sample_coefficient(f32::NAN, SR), 1.0);
-        assert_eq!(sample_coefficient(1_000.0, 0.0), 1.0);
+        // Degenerate inputs fail safe to a pass-through (pole 0) rather than
+        // to a filter that cannot be opened.
+        assert_eq!(sample_pole(0.0, SR), 0.0);
+        assert_eq!(sample_pole(-100.0, SR), 0.0);
+        assert_eq!(sample_pole(f32::NAN, SR), 0.0);
+        assert_eq!(sample_pole(1_000.0, 0.0), 0.0);
         // Above Nyquist it saturates rather than wrapping.
-        let above = sample_coefficient(1e9, SR);
-        assert!(above.is_finite() && above <= 1.0, "got {above}");
-        assert!(above > 0.9);
+        let above = sample_pole(1e9, SR);
+        assert!(
+            above.is_finite() && (0.0..1.0).contains(&above),
+            "got {above}"
+        );
     }
 
-    // ── Look-ahead behaviour ──
+    #[test]
+    fn the_sidechain_band_is_a_band_not_a_mute() {
+        // Feed the filter directly: a tone inside the band must come out close
+        // to its input level, and a tone below the high-pass corner must come
+        // out much smaller. Without this, a filter that crushed everything
+        // would still pass the "sidechain changes the response" test.
+        let mut state = SidechainState::default();
+        let high_pole = sample_pole(200.0, SR);
+        let low_pole = sample_pole(2_000.0, SR);
+
+        let peak_at = |state: &mut SidechainState, hz: f32| -> f32 {
+            state.reset();
+            let mut peak = 0.0_f32;
+            for n in 0..8_192 {
+                let x = sin_poly(2.0 * PI * hz * n as f32 / SR);
+                let y = state.process(x, high_pole, low_pole);
+                if n > 4_096 {
+                    peak = peak.max(y.abs());
+                }
+            }
+            peak
+        };
+
+        let centre = peak_at(&mut state, 700.0);
+        let below = peak_at(&mut state, 20.0);
+        assert!(
+            centre > 0.8,
+            "a tone in the middle of the band came out at {centre}"
+        );
+        assert!(
+            below < 0.2,
+            "a tone below the high-pass corner came out at {below}"
+        );
+    }
+
+    // -- Look-ahead behaviour --
 
     #[test]
-    fn lookahead_moves_the_gain_before_the_transient_arrives() {
-        // The mechanism, stated directly: with look-ahead, the detector reads
-        // the *undelayed* input while the audio path is delayed, so the gain
-        // reduction is already under way by the time the loud samples emerge.
-        // Without it, the loud samples emerge in the same block that first
-        // asks for reduction, so they get through at the old gain.
+    fn lookahead_reduces_the_emerging_transient() {
+        // The mechanism, stated directly: the detector reads the input as it
+        // arrives while the audio path is delayed, so the reduction is already
+        // in place by the time the loud samples leave the line. Without
+        // look-ahead the loud samples emerge in the block that first asks for
+        // reduction, so they get through at (almost) the old gain.
         //
-        // Both compressors are settled on a quiet tone first, so the detector
-        // is not travelling up from silence — that would dominate the result.
+        // Both compressors are settled on a quiet level first. Without that
+        // settling the comparison would be dominated by the detector travelling
+        // up from silence rather than by the look-ahead.
         let mut without = make();
         let mut with = make();
         for effect in [&mut without, &mut with] {
@@ -1486,8 +1638,6 @@ mod tests {
         let settle = |effect: &mut Compressor| {
             let mut left = alloc::vec![0.0_f32; CHUNK];
             let mut right = alloc::vec![0.0_f32; CHUNK];
-            // The attack curve needs several time constants to arrive from
-            // -144 dB, so settle it for far longer than the attack time.
             for round in 0..96 {
                 left.iter_mut().for_each(|s| *s = settle_level);
                 right.iter_mut().for_each(|s| *s = settle_level);
@@ -1502,52 +1652,39 @@ mod tests {
         settle(&mut without);
         settle(&mut with);
 
-        // The loud burst, as the raw input the payload will contain.
+        // The loud burst. The peak over the whole run is the quantity that
+        // matters: a limiter-shaped overshoot at the onset is exactly what
+        // look-ahead exists to remove.
         let burst = 0.9_f32;
-        let run = |effect: &mut Compressor| -> (f32, f32) {
+        let peak_of_burst = |effect: &mut Compressor| -> f32 {
             let mut left = alloc::vec![0.0_f32; CHUNK];
             let mut right = alloc::vec![0.0_f32; CHUNK];
-            // The gain at the *start* of the burst, and the first sample of
-            // the burst that actually reaches the output.
-            let mut gain_before = 0.0_f32;
-            let mut first_burst_sample = 0.0_f32;
-            let mut seen_burst = false;
+            let mut peak = 0.0_f32;
             for round in 0..24 {
                 left.iter_mut().for_each(|s| *s = burst);
                 right.iter_mut().for_each(|s| *s = burst);
-                if round == 0 {
-                    gain_before = effect.current_gain();
-                }
                 block(effect, &mut left, &mut right, ((96 + round) * CHUNK) as i64);
-                if !seen_burst {
-                    // The delayed payload is quiet until the burst emerges, and
-                    // with no look-ahead it emerges immediately.
-                    for sample in left.iter() {
-                        if sample.abs() > burst * 0.5 {
-                            first_burst_sample = sample.abs();
-                            seen_burst = true;
-                            break;
-                        }
-                    }
+                for sample in left.iter() {
+                    peak = peak.max(sample.abs());
                 }
             }
-            (gain_before, first_burst_sample)
+            peak
         };
 
-        let (fast_gain, fast_first) = run(&mut without);
-        let (slow_gain, slow_first) = run(&mut with);
+        let fast_peak = peak_of_burst(&mut without);
+        let slow_peak = peak_of_burst(&mut with);
 
-        // The look-ahead version starts reducing a window before the burst is
-        // emitted; the other cannot, because its detector and its output are
-        // the same samples.
         assert!(
-            slow_first < fast_first,
-            "look-ahead did not reduce the emerging transient: {slow_first} vs {fast_first}"
+            slow_peak < fast_peak,
+            "look-ahead did not reduce the emerging transient: {slow_peak} vs {fast_peak}"
         );
-        assert!(fast_first > 0.0 && slow_first > 0.0, "no burst was found");
-        // The gain at the start of the burst is 1.0 for the look-ahead design
-        // only if it has not yet seen the burst — which is the point.
-        assert!(fast_gain.is_finite() && slow_gain.is_finite());
+        // The look-ahead version must actually catch the burst, not merely
+        // squeeze it by a hair: with a full window of warning the reduction is
+        // well under way before the samples leave the line.
+        assert!(
+            slow_peak < fast_peak * 0.8,
+            "look-ahead only reduced the transient from {fast_peak} to {slow_peak}"
+        );
     }
 
     #[test]

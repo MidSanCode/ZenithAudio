@@ -1,6 +1,6 @@
 //! Chorus: a modulated short delay mixed back with the dry signal.
 //!
-//! PLAN §3.S5 groups chorus, flanger and phaser under modulation. This module
+//! PLAN section 3.S5 groups chorus, flanger and phaser under modulation. This module
 //! is the chorus member of that family.
 //!
 //! # What makes a chorus a chorus
@@ -9,7 +9,7 @@
 //! the dry signal. Two properties are audible and both are easy to get wrong:
 //!
 //! 1. **The delay has to be fractional.** A chorus's delay sits between about
-//!    5 ms and 40 ms, and the LFO moves it by a few milliseconds per cycle —
+//!    5 ms and 40 ms, and the LFO moves it by a few milliseconds per cycle --
 //!    a fraction of a sample per sample. Reading the line at an *integer* tap
 //!    rounds that motion to a staircase, which turns the detuning into
 //!    ring-modulation sidebands. The line here interpolates linearly.
@@ -20,7 +20,7 @@
 //! # Feedback
 //!
 //! Feedback is what makes a chorus thicken rather than merely double. It is
-//! also what makes it explode: the loop is `line → damping → gain → line`, and
+//! also what makes it explode: the loop is `line -> damping -> gain -> line`, and
 //! a gain of 1 turns a chorus into an oscillator at the LFO's rate. The gain is
 //! therefore clamped well below unity (`MAX_FEEDBACK`) and the loop still
 //! passes through a one-pole low-pass, so the round-trip gain is below 1 at
@@ -30,7 +30,7 @@
 //!
 //! The right channel's LFO runs a quarter cycle ahead of the left's. Without
 //! that offset the two channels produce identical, perfectly correlated
-//! detuning, which sums back to a mono effect with a comb — the opposite of
+//! detuning, which sums back to a mono effect with a comb -- the opposite of
 //! what the effect is for.
 //!
 //! # Real-time safety
@@ -79,7 +79,7 @@ pub const MAX_DELAY_MS: f32 = 40.0;
 /// The most the LFO can move the delay either side of its centre, in
 /// milliseconds.
 ///
-/// The modulation window is therefore `centre ± this`, clamped to the
+/// The modulation window is therefore `centre +/- this`, clamped to the
 /// parameter range, which is what keeps a deep setting at a short centre time
 /// from asking for a negative delay.
 const MAX_MOD_DEPTH_MS: f32 = 20.0;
@@ -266,6 +266,11 @@ impl ChorusLine {
     }
 
     /// Reads `delay_samples` back from the cursor, with linear interpolation.
+    ///
+    /// `process` calls this before writing the current frame, so the cursor
+    /// sits at the time of the frame being produced; the sample `d` frames ago
+    /// lives at `(cursor - d) mod len`. The fractional part interpolates
+    /// between that tap and the one before it.
     #[must_use]
     fn read(&self, delay_samples: f32) -> f32 {
         let capacity = self.capacity();
@@ -280,7 +285,7 @@ impl ChorusLine {
         };
         let whole = delay as usize;
         let fraction = delay - whole as f32;
-        let base = self.write + len - 1 - whole;
+        let base = self.write + len - whole;
         let first = self.ring[base % len];
         let second = self.ring[(base + len - 1) % len];
         first + (second - first) * fraction
@@ -408,9 +413,7 @@ impl Chorus {
     #[must_use]
     fn modulated_delay_ms(&self, lfo: f32, channel: usize) -> f32 {
         let depth = (self.depth_percent / 100.0).clamp(0.0, 1.0) * MAX_MOD_DEPTH_MS;
-        let centre = self
-            .delay_ms
-            .clamp(MIN_DELAY_MS, MAX_DELAY_MS);
+        let centre = self.delay_ms.clamp(MIN_DELAY_MS, MAX_DELAY_MS);
         let swing = depth.min(centre - MIN_DELAY_MS).max(0.0);
         let _ = channel;
         centre + lfo * swing
@@ -513,8 +516,8 @@ impl EffectProcessor for Chorus {
                 self.dry[..frames].copy_from_slice(source);
             }
             // Sanitize the snapshot once per channel. A NaN that reached the
-            // delay line would never come back out — it would sit in the ring
-            // and be re-read every period — so the whole effect would be dead
+            // delay line would never come back out -- it would sit in the ring
+            // and be re-read every period -- so the whole effect would be dead
             // from one bad sample. Replacing it here confines the damage to the
             // one frame that produced it.
             for sample in self.dry[..frames].iter_mut() {
@@ -629,11 +632,8 @@ impl EffectProcessor for Chorus {
         // A chorus's feedback is short and heavily damped; one delay period is
         // a generous bound and prevents an offline bounce from truncating the
         // tail of a heavily-fed chorus.
-        let longest = self
-            .last_delay_left
-            .max(self.last_delay_right)
-            .max(0.0)
-            / self.sample_rate.max(1.0);
+        let longest =
+            self.last_delay_left.max(self.last_delay_right).max(0.0) / self.sample_rate.max(1.0);
         (longest * 4.0).max(0.05)
     }
 }
@@ -676,32 +676,6 @@ mod tests {
         let mut effect = Chorus::new(ParameterAddress::effect(0, 0, PARAM_RATE));
         effect.prepare(SR, 256, 2);
         effect
-    }
-
-    /// Renders a stereo pair in 256-frame blocks, running `f(index)` per frame.
-    fn render<F>(effect: &mut Chorus, frames: usize, bpm: f32, mut f: F) -> (Vec<f32>, Vec<f32>)
-    where
-        F: FnMut(usize) -> f32,
-    {
-        let chunk = 256;
-        let mut left_out = Vec::with_capacity(frames);
-        let mut right_out = Vec::with_capacity(frames);
-        let mut produced = 0;
-        while produced < frames {
-            let n = chunk.min(frames - produced);
-            let mut left: Vec<f32> = (0..n).map(|i| f(produced + i)).collect();
-            let mut right = left.clone();
-            {
-                let mut views = [&mut left[..], &mut right[..]];
-                let mut buffer = AudioBuffer::new(&mut views);
-                let ctx = RenderContext::new(SR, n, produced as i64, bpm, 960);
-                effect.process(&mut buffer, &ctx);
-            }
-            left_out.extend_from_slice(&left);
-            right_out.extend_from_slice(&right);
-            produced += n;
-        }
-        (left_out, right_out)
     }
 
     /// A slow sine, `hz` cycles per second.
@@ -884,7 +858,7 @@ mod tests {
     fn the_lfo_phase_wraps_and_never_runs_away() {
         // A phase that accumulated without wrapping eventually reaches the
         // magnitude where `sin` of it is meaningless. Run for a long time at a
-        // high rate and check the phase stays in its documented window — and,
+        // high rate and check the phase stays in its documented window -- and,
         // more importantly, that the LFO still moves.
         let mut effect = make();
         effect.set_parameter(PARAM_RATE, 10.0);
@@ -1082,9 +1056,8 @@ mod tests {
         for sample in left.iter().chain(right.iter()) {
             assert!(sample.is_finite(), "non-finite sample: {sample}");
         }
-        let energy = |from: usize, to: usize| -> f32 {
-            left[from..to].iter().map(|s| s * s).sum::<f32>()
-        };
+        let energy =
+            |from: usize, to: usize| -> f32 { left[from..to].iter().map(|s| s * s).sum::<f32>() };
         let early = energy(0, 12_000);
         let late = energy(36_000, 48_000);
         assert!(

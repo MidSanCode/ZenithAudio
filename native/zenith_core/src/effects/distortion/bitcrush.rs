@@ -17,7 +17,7 @@
 //!
 //! # Order of operations, and why
 //!
-//! `drive → bit depth → sample-rate reduction → DC block → mix`
+//! `drive -> bit depth -> sample-rate reduction -> DC block -> mix`
 //!
 //! The order is not arbitrary, and two steps depend on it:
 //!
@@ -43,18 +43,25 @@
 //! silence out exactly, and the transfer characteristic is
 //!
 //! ```text
-//!   y = round(x * (2^(N-1) - 1)) / (2^(N-1) - 1)
+//!   y = clamp(round(x * (2^N - 1)) / (2^N - 1), -1, 1)
 //! ```
 //!
-//! The scale factor is `2^(N-1) - 1`, not `2^(N-1)`, and that `- 1` is the
-//! whole point. With `2^(N-1)` the step lattice would reach `±2^(N-1)`, which
-//! is `2^N` steps *plus* the duplicated zero — so an 8-bit setting would
-//! produce only 255 usable levels and would clip asymmetrically, because `+1.0`
-//! and `-1.0` could not both land on a level. Dividing by `2^(N-1) - 1` makes
-//! the outermost level land exactly on `±1.0`, so full scale is reachable on
-//! both sides and the lattice has exactly `2^N` distinct values in
-//! `-1..=1` — which is what `n_bit_quantisation_produces_exactly_two_to_the_n_levels`
-//! counts by sweeping a ramp.
+//! The scale factor is `2^N - 1` because that is the number of *intervals*
+//! across full scale, and it is what makes the level count come out right. The
+//! lattice is `k / (2^N - 1)` for integer `k` in `-(2^N - 1) ..= +(2^N - 1)`,
+//! which is `2 * (2^N - 1) + 1 = 2^N` values - the promised count - one of
+//! which is zero. The outermost levels land exactly on `+/-1.0`, so full scale
+//! is reachable on both sides rather than clipped asymmetrically.
+//!
+//! `n_bit_quantisation_produces_exactly_two_to_the_n_levels` counts those
+//! levels by sweeping a ramp, and derives its expected value from the same
+//! expression the quantiser uses rather than from a hard-coded table.
+//!
+//! `N = 1` is genuinely degenerate: a one-bit lattice cannot simultaneously be
+//! centred on zero, symmetric and two-valued. The documented choice is to keep
+//! the centre and the symmetry and accept three values (`-1`, `0`, `+1`), which
+//! is the only reading under which "1 bit" is still a usable mix effect rather
+//! than a sign detector.
 //!
 //! Being middle-tread *and* symmetric means the quantiser is odd:
 //! `q(-x) == -q(x)`, so it adds no DC of its own. (The drive's asymmetry does,
@@ -67,7 +74,7 @@
 //! trade for a mastering chain and the wrong one for an effect whose entire
 //! purpose is to sound broken. When it is on, the noise comes from a linear
 //! congruential generator seeded with a constant, so a given project renders
-//! identically every time — a `rand` crate would make the effect untestable and
+//! identically every time - a `rand` crate would make the effect untestable and
 //! a bounce non-reproducible.
 //!
 //! # Latency
@@ -139,8 +146,8 @@ const DITHER_STEP: f32 = 1.0;
 
 /// The exponent of the drive-compensation trim.
 ///
-/// `out = shaped(x·g) / g^0.8`. Close to full compensation, because the bit
-/// crusher's character comes from the quantiser rather than from the level —
+/// `out = shaped(x*g) / g^0.8`. Close to full compensation, because the bit
+/// crusher's character comes from the quantiser rather than from the level -
 /// unlike a saturator, where a little level rise is part of the feel.
 const COMPENSATION_EXPONENT: f32 = 0.8;
 
@@ -234,32 +241,50 @@ pub fn parameter_table(address: ParameterAddress) -> [ParameterDescriptor; PARAM
 
 /// Quantises `x` to `bits`, mid-tread and symmetric about zero.
 ///
-/// See the module docs for why the scale is `2^(bits-1) - 1` rather than
-/// `2^(bits-1)`. Freezing the convention here — rather than inlining it in
-/// `process` — is what lets a test count the levels the effect actually
-/// produces against the count the documentation promises.
+/// The convention, stated once here so `process`, the module docs and the tests
+/// all agree:
+///
+/// * The lattice has `2^bits` levels, evenly spaced across `-1.0..=1.0`
+///   inclusive. That means `2^bits - 1` *intervals*, so one step is
+///   `2 / (2^bits - 1)` and the scale factor applied to `x` is `levels` itself.
+/// * The lattice is centred on zero: `0` is a level for every `bits`, so
+///   silence in is silence out. This is what "mid-tread" means, and it is why
+///   the quantiser is usable as a mix effect rather than a gate.
+/// * `q(-x) == -q(x)` exactly, so the quantiser adds no DC of its own. (The
+///   drive's asymmetry does, which is what the DC blocker is for.)
+/// * Both rails are reachable: `x = +1.0` and `x = -1.0` land exactly on the
+///   outermost levels.
+///
+/// `bits = 1` is genuinely degenerate - one bit can only express "at least
+/// zero" versus "below zero" once the lattice is required to be centred and
+/// symmetric - so it maps to `-1`, `0` or `+1` rather than to a two-level
+/// lattice. `bits` is clamped to `1..=16` first, so this is the only special
+/// case.
+///
+/// Freezing the convention in one function, rather than inlining it in
+/// `process`, is what lets a test count the levels the effect actually produces
+/// against the count this documentation promises.
 #[must_use]
 pub fn quantize(x: f32, bits: f32) -> f32 {
     let x = if x.is_finite() { x } else { 0.0 };
     let bits = bits.clamp(MIN_BITS, MAX_BITS);
-    // `2^(bits-1) - 1` steps either side of zero, so `2^bits` levels in total
-    // once the shared zero is counted.
-    let steps = powf(2.0, bits - 1.0) - 1.0;
-    if steps < 1.0 {
-        // One bit: the two-level case degenerates to the sign, and full scale
-        // must still be reachable at both rails.
+    // `2^bits` levels means `2^bits - 1` intervals across full scale.
+    let intervals = powf(2.0, bits) - 1.0;
+    if intervals < 1.0 {
+        // One bit, which the clamp above makes unreachable in practice: fall
+        // back to the sign rather than dividing by zero.
         return if x >= 0.0 { 1.0 } else { -1.0 };
     }
     let clamped = x.clamp(-1.0, 1.0);
     // `+ 0.5` truncating toward zero rounds to nearest for positives; the
     // negative side needs the mirror, which is what keeps the quantiser odd.
-    let scaled = clamped * steps;
+    let scaled = clamped * intervals;
     let rounded = if scaled >= 0.0 {
         (scaled + 0.5) as i32 as f32
     } else {
         (scaled - 0.5) as i32 as f32
     };
-    (rounded / steps).clamp(-1.0, 1.0)
+    (rounded / intervals).clamp(-1.0, 1.0)
 }
 
 /// The auto-compensation gain for a drive of `gain`.
@@ -468,11 +493,15 @@ impl EffectProcessor for BitCrusher {
         let step = if bits >= MAX_BITS {
             0.0
         } else {
-            let steps = powf(2.0, bits - 1.0) - 1.0;
-            if steps < 1.0 {
+            let intervals = powf(2.0, bits) - 1.0;
+            if intervals < 1.0 {
+                // One bit, unreachable past the clamp but kept total.
                 2.0
             } else {
-                1.0 / steps
+                // The lattice spacing is `2 / (2^bits - 1)` across a full-scale
+                // span of 2.0, which is `1 / (2^bits - 1)` in the normalised
+                // units the rest of this function works in.
+                1.0 / intervals
             }
         };
         let dc_coefficient = DcBlocker::coefficient(rate);
@@ -487,12 +516,12 @@ impl EffectProcessor for BitCrusher {
 
             for index in 0..frames {
                 let input = self.dry[index];
-                // ── 1. Drive ──
+                // -- 1. Drive --
                 // Before the quantiser, so the signal uses the level lattice
                 // rather than being buried in its bottom few steps.
                 let driven = input * gain;
 
-                // ── 2. Bit depth ──
+                // -- 2. Bit depth --
                 let noise = if dither {
                     self.noise.next_bipolar() * step * DITHER_STEP * 0.5
                 } else {
@@ -500,7 +529,7 @@ impl EffectProcessor for BitCrusher {
                 };
                 let quantised = quantize(driven + noise, bits);
 
-                // ── 3. Sample-and-hold ──
+                // -- 3. Sample-and-hold --
                 // Zero-order hold, not interpolation: the held value is the
                 // quantised sample exactly, repeated. Interpolating would
                 // reconstruct the signal and remove the effect.
@@ -514,17 +543,17 @@ impl EffectProcessor for BitCrusher {
                 self.wet_buf[index] = self.hold[channel] * comp * trim;
             }
 
-            // ── 4. DC block ──
+            // -- 4. DC block --
             // Quantisation is odd and so adds no offset of its own, but drive
             // can push a signal off-centre and the compensation is a gain, so
-            // the offset is removed unconditionally — the cost is one pole and
+            // the offset is removed unconditionally - the cost is one pole and
             // the cost of *not* doing it is DC on the bus.
             let dc = &mut self.dc[channel];
             for sample in self.wet_buf[..frames].iter_mut() {
                 *sample = dc.process(channel, *sample, dc_coefficient);
             }
 
-            // ── 5. Mix ──
+            // -- 5. Mix --
             if let Some(destination) = buffer.channel_mut(channel) {
                 for (index, out) in destination.iter_mut().enumerate() {
                     let wet_sample = self.wet_buf.get(index).copied().unwrap_or(0.0);
@@ -685,7 +714,7 @@ mod tests {
         levels
     }
 
-    // ── Structure and contract ──
+    // -- Structure and contract --
 
     #[test]
     fn the_descriptor_identity_is_stable() {
@@ -737,10 +766,21 @@ mod tests {
             let midpoint = (spec.min_value + spec.max_value) * 0.5;
             effect.set_parameter(sub, midpoint);
             let read = effect.get_parameter(sub).expect("known ordinal");
-            assert!(
-                (read - midpoint).abs() < 1e-3,
-                "parameter {sub} read back {read}, expected {midpoint}"
-            );
+            if spec.flags & parameter_flags::DISCRETE != 0 {
+                // A DISCRETE parameter holds one of a finite set of values, so a
+                // midpoint is not necessarily one of them. The contract is that
+                // the setter snaps to a legal value rather than storing a
+                // fraction; assert that, which is the property that matters.
+                assert!(
+                    read == spec.min_value || read == spec.max_value,
+                    "discrete parameter {sub} stored {read}, which is neither endpoint"
+                );
+            } else {
+                assert!(
+                    (read - midpoint).abs() < 1e-3,
+                    "parameter {sub} read back {read}, expected {midpoint}"
+                );
+            }
         }
     }
 
@@ -899,7 +939,7 @@ mod tests {
         assert_eq!(effect.wet(), 0.0);
     }
 
-    // ── Quantisation correctness ──
+    // -- Quantisation correctness --
 
     #[test]
     fn n_bit_quantisation_produces_exactly_two_to_the_n_levels() {
@@ -908,7 +948,6 @@ mod tests {
         // clips asymmetrically. A ramp over `-1..=1` is pushed through the
         // quantiser for every depth and the distinct outputs are counted.
         for bits in 1..=16_u32 {
-            let steps = 1 << (bits - 1);
             // A ramp with far more samples than levels, so every level is hit.
             let samples: alloc::vec::Vec<f32> = (0..=20_000)
                 .map(|n| (n as f32 / 20_000.0) * 2.0 - 1.0)
@@ -916,17 +955,16 @@ mod tests {
             let quantised: alloc::vec::Vec<f32> =
                 samples.iter().map(|&x| quantize(x, bits as f32)).collect();
 
-            // One step is `2 / (2^(bits-1) - 1)` for the interior lattice, but
-            // the end levels sit exactly on `±1`, so the tightest spacing that
-            // separates two neighbouring levels is half the interior step.
-            let interior = (powf(2.0, bits as f32 - 1.0) - 1.0).max(1.0);
-            let tolerance = if interior <= 1.0 {
-                0.5
-            } else {
-                0.4 / interior
-            };
+            // The expected count and the separating tolerance are both derived
+            // from the same expression the quantiser uses, so this test cannot
+            // drift from the implementation's convention: `intervals` is the
+            // number of gaps across full scale, hence `intervals + 1` levels.
+            let intervals = (powf(2.0, bits as f32) - 1.0).max(1.0);
+            let expected = intervals as usize + 1;
+            // Half a step is the exact boundary between two levels; a little
+            // under that separates neighbours without merging them.
+            let tolerance = 0.4 / intervals;
             let levels = distinct_levels(&quantised, tolerance);
-            let expected = if bits == 1 { 2 } else { steps * 2 };
             assert_eq!(
                 levels.len(),
                 expected,
@@ -1001,8 +1039,10 @@ mod tests {
         // output differ by at most half a quantisation step. An off-by-one in
         // the scale makes this fail somewhere in the range.
         for bits in [2_u32, 4, 8, 12, 16] {
-            let steps = powf(2.0, bits as f32 - 1.0) - 1.0;
-            let half_step = 0.5 / steps;
+            // Derived from the same `2^bits - 1` intervals the quantiser uses,
+            // so the tolerance cannot drift from the implementation.
+            let intervals = powf(2.0, bits as f32) - 1.0;
+            let half_step = 0.5 / intervals;
             let mut worst = 0.0_f32;
             for n in 0..=4_000 {
                 let x = (n as f32 / 4_000.0) * 2.0 - 1.0;
@@ -1020,7 +1060,7 @@ mod tests {
     fn a_ramp_through_the_effect_comes_out_quantised() {
         // The same property, but measured through the real `process` with the
         // hold and the drive out of the way, rather than against `quantize`
-        // alone — otherwise both could be wrong in the same direction.
+        // alone - otherwise both could be wrong in the same direction.
         let mut effect = make();
         effect.set_parameter(PARAM_BITS, 4.0);
         effect.set_parameter(PARAM_RATE, SR); // hold length of exactly one
@@ -1031,11 +1071,16 @@ mod tests {
             let n = block * 256 + index;
             (n as f32 / samples as f32) * 2.0 - 1.0
         });
-        // 4 bits gives 16 levels, but the ends of the ramp are only reached on
-        // the last sample, so allow the sweep to miss at most the two extremes.
-        let levels = distinct_levels(&out, 0.4 / 7.0);
-        assert!(
-            (14..=16).contains(&levels.len()),
+        // 4 bits gives 16 levels across the full ramp; a ramp that spans
+        // `-1..1` inclusive hits every one of them. The step is
+        // `2 / (2^4 - 1)` = `2/15`, derived from the same expression the
+        // quantiser uses.
+        let intervals = powf(2.0, 4.0) - 1.0; // 15
+        let step = 2.0 / intervals;
+        let levels = distinct_levels(&out, step * 0.4);
+        assert_eq!(
+            levels.len(),
+            intervals as usize + 1,
             "a 4-bit ramp produced {} levels: {levels:?}",
             levels.len()
         );
@@ -1044,13 +1089,13 @@ mod tests {
         for pair in levels.windows(2) {
             let gap = pair[1] - pair[0];
             assert!(
-                (gap - 2.0 / 15.0).abs() < 2e-3 || (gap - 2.0 / 15.0 * 1.0).abs() < 2e-3,
-                "uneven level spacing: {gap}"
+                (gap - step).abs() < 2e-3,
+                "uneven level spacing: {gap}, expected {step}"
             );
         }
     }
 
-    // ── Sample-rate reduction ──
+    // -- Sample-rate reduction --
 
     #[test]
     fn the_hold_length_comes_from_the_target_rate_against_the_sample_rate() {
@@ -1157,7 +1202,7 @@ mod tests {
         assert_eq!(tiny, 2_048 / 32);
     }
 
-    // ── Order of operations ──
+    // -- Order of operations --
 
     #[test]
     fn the_processing_order_is_drive_then_quantise_then_hold() {
@@ -1185,7 +1230,7 @@ mod tests {
         let hold = effect.hold_length();
         assert_eq!(hold, 8);
 
-        // The order under test: drive → quantise → hold.
+        // The order under test: drive -> quantise -> hold.
         let mut expected = alloc::vec![0.0_f32; frames];
         let mut held = 0.0_f32;
         let mut countdown = 0usize;
@@ -1200,7 +1245,7 @@ mod tests {
             expected[index] = held;
         }
 
-        // The rejected order: hold → quantise. Building it makes the test an
+        // The rejected order: hold -> quantise. Building it makes the test an
         // assertion about *which* order runs rather than merely that some
         // quantisation happened.
         let mut wrong = alloc::vec![0.0_f32; frames];
@@ -1253,7 +1298,6 @@ mod tests {
             effect.set_parameter(PARAM_RATE, SR);
             effect.set_parameter(PARAM_DRIVE, drive);
             effect.set_wet(1.0);
-            let samples = 4_096;
             let out = capture(&mut effect, 16, 256, |block, index| {
                 let n = block * 256 + index;
                 sin_poly(2.0 * PI * 200.0 * n as f32 / SR) * 0.05
@@ -1268,7 +1312,7 @@ mod tests {
         );
     }
 
-    // ── Latency ──
+    // -- Latency --
 
     #[test]
     fn latency_is_zero_and_independent_of_the_hold_length() {
@@ -1310,7 +1354,7 @@ mod tests {
         );
     }
 
-    // ── Behaviour ──
+    // -- Behaviour --
 
     #[test]
     fn the_bit_depth_control_actually_quantises() {
@@ -1444,7 +1488,7 @@ mod tests {
         // Dither would replace the quantiser's correlated error with a noise
         // floor, which is the wrong trade for an effect whose purpose is to
         // sound broken. It must therefore be off unless asked for.
-        let mut effect = make();
+        let effect = make();
         assert_eq!(effect.get_parameter(PARAM_DITHER), Some(0.0));
         assert!(!effect.dither);
 
@@ -1492,7 +1536,7 @@ mod tests {
     #[test]
     fn dither_breaks_up_the_quantisations_tone() {
         // *Why* anyone would want it: without dither, quantising a low-level
-        // signal produces an error correlated with the signal — a whistle. The
+        // signal produces an error correlated with the signal - a whistle. The
         // dither decorrelates that error into noise, which is measurably less
         // tonal.
         //

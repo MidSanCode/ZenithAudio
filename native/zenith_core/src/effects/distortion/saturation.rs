@@ -12,16 +12,16 @@
 //! | Character | Curve | What it does |
 //! |---|---|---|
 //! | [`Character::Soft`] | `tanh` | Rounds the peaks off. The odd-symmetric, infinitely differentiable case: it adds odd harmonics and grows them gently, which is the "warm" end of the range. |
-//! | [`Character::Hard`] | `clamp(-1, 1)` | Shears the peaks flat. A discontinuity in the *derivative*, so it generates a much richer, harsher harmonic series 閳?the "aggressive" end. |
+//! | [`Character::Hard`] | `clamp(-1, 1)` | Shears the peaks flat. A discontinuity in the *derivative*, so it generates a much richer, harsher harmonic series - the "aggressive" end. |
 //! | [`Character::Asymmetric`] | `tanh` with a different gain either side of zero | The curve is no longer odd, so it generates **even** harmonics as well, and a DC offset. This is the valve-like case; the DC is why the effect blocks it. |
-//! | [`Character::Fold`] | triangle-wave reflection | Past the rail the signal *turns around* instead of flattening, so a louder input produces a lower output. Inharmonic and metallic 閳?a sound effect rather than a mix tool. |
+//! | [`Character::Fold`] | triangle-wave reflection | Past the rail the signal *turns around* instead of flattening, so a louder input produces a lower output. Inharmonic and metallic - a sound effect rather than a mix tool. |
 //!
 //! # Why the fold is a reflection and not a modulo
 //!
 //! `y = ((x + 1) mod 4) - 1` looks like a fold and is one, for the first
 //! period. But `mod` wraps at the point where the signal crosses zero, so a
 //! smoothly rising input produces a jump discontinuity in the output every full
-//! period 閳?a click. The reflection below instead bounces the signal off the
+//! period - a click. The reflection below instead bounces the signal off the
 //! rails: it is continuous everywhere, and only its derivative changes
 //! direction. That is the difference between a musical effect and a fault.
 //!
@@ -29,18 +29,18 @@
 //!
 //! Any nonlinearity generates harmonics above Nyquist, and those fold back down
 //! as inharmonic tones that no downstream filter removes. A hard-clipped 7 kHz
-//! tone puts energy at 21 kHz, 35 kHz, 閳?and the terms above 24 kHz land
+//! tone puts energy at 21 kHz, 35 kHz, ... and the terms above 24 kHz land
 //! squarely in the audible band. Running the curve at 4x and filtering on the
 //! way back down keeps the images where the decimation filter can remove them.
 //! [`crate::effects::util::Oversampler`] is the suite's single implementation
-//! of that (PLAN 鎼?.S5 forbids each effect rolling its own half-band filter),
+//! of that (the S5 plan forbids each effect rolling its own half-band filter),
 //! and `oversampling_reduces_the_folded_energy_of_a_hard_clipped_tone` measures
 //! the improvement rather than assuming it.
 //!
 //! # Gain compensation
 //!
 //! Driving a saturator harder makes it louder as well as dirtier, which makes
-//! A/B comparison useless 閳?the louder one always "sounds better". The trim is
+//! A/B comparison useless - the louder one always "sounds better". The trim is
 //! therefore applied automatically: the output is divided by `gain^0.7`, which
 //! cancels most of the level rise without flattening the effect's dynamics
 //! entirely. The `output_db` parameter is an *additional* manual trim on top,
@@ -85,7 +85,7 @@ const FACTOR: OversamplingFactor = OversamplingFactor::X4;
 
 /// The exponent of the automatic gain compensation.
 ///
-/// `out = shaped(x璺痝) / g^0.7`. At 0 the compensation is complete (output level
+/// `out = shaped(x * g) / g^0.7`. At 0 the compensation is complete (output level
 /// is constant in `g`, which also removes the effect's dynamics); at 1 it is
 /// absent. 0.7 leaves a little level rise so pushing the drive still *feels*
 /// louder, without the 12 dB swing that makes an A/B useless.
@@ -188,7 +188,7 @@ impl Character {
     #[must_use]
     fn fold(x: f32) -> f32 {
         // Period 4 triangle centred on zero: rise to +1, fall to -1, rise
-        // again 閳?reading back down gives the reflection.
+        // again - reading back down gives the reflection.
         let period = 4.0_f32;
         let shifted = x + 1.0;
         // `rem_euclid` is not used because it is not const-friendly across the
@@ -321,7 +321,7 @@ pub struct Saturation {
     scratch: alloc::vec::Vec<f32>,
     /// Preallocated snapshot of the dry input, `max_block`.
     dry: alloc::vec::Vec<f32>,
-    /// Preallocated driven input (dry 鑴?drive + bias), `max_block`.
+    /// Preallocated driven input (dry x drive + bias), `max_block`.
     driven: alloc::vec::Vec<f32>,
     /// Preallocated wet working buffer, `max_block`.
     wet_buf: alloc::vec::Vec<f32>,
@@ -505,7 +505,7 @@ impl EffectProcessor for Saturation {
                 }
             }
 
-            // 閳光偓閳光偓 DC block 閳光偓閳光偓
+            // -- DC block --
             // An asymmetric curve (or any bias) shifts the waveform's mean, and
             // DC on a bus eats headroom and makes the meter read high for no
             // audible reason.
@@ -688,7 +688,7 @@ mod tests {
         total
     }
 
-    // ── Structure and contract ──
+    // -- Structure and contract --
 
     #[test]
     fn the_descriptor_identity_is_stable() {
@@ -887,7 +887,7 @@ mod tests {
         assert!(!Character::Soft.is_asymmetric());
     }
 
-    // ── Latency ──
+    // -- Latency --
 
     #[test]
     fn latency_is_zero_at_zero_drive() {
@@ -918,7 +918,7 @@ mod tests {
         );
     }
 
-    // ── The transfer curves ──
+    // -- The transfer curves --
 
     #[test]
     fn the_soft_curve_is_odd_and_monotonic() {
@@ -1007,7 +1007,7 @@ mod tests {
         );
     }
 
-    // ── Unity at 0 dB drive ──
+    // -- Unity at 0 dB drive --
 
     #[test]
     fn zero_drive_is_unity_for_a_small_signal() {
@@ -1054,7 +1054,7 @@ mod tests {
         );
     }
 
-    // ── Gain compensation ──
+    // -- Gain compensation --
 
     #[test]
     fn raising_drive_does_not_wildly_change_the_output_level() {
@@ -1147,7 +1147,7 @@ mod tests {
         }
     }
 
-    // ── DC blocking ──
+    // -- DC blocking --
 
     #[test]
     fn a_constant_input_does_not_leave_a_dc_offset() {
@@ -1202,12 +1202,12 @@ mod tests {
         );
     }
 
-    // ── The aliasing test ──
+    // -- The aliasing test --
 
     #[test]
     fn oversampling_reduces_the_folded_energy_of_a_hard_clipped_tone() {
         // The reason the module exists. A 7 kHz tone clipped hard produces
-        // harmonics at 21 kHz, 35 kHz, … and the terms above 24 kHz fold back
+        // harmonics at 21 kHz, 35 kHz, ... and the terms above 24 kHz fold back
         // into the audible band. Oversampling must measurably reduce that.
         //
         // The comparison is between the real effect (oversampled) and a
@@ -1495,7 +1495,7 @@ mod tests {
     fn the_transfer_function_matches_what_process_does() {
         // The public `transfer` helper and the audio path must agree, or the
         // documentation of the curve is describing something the effect does
-        // not do. Compared at 0 dB drive with the shaper disengaged? No — with
+        // not do. Compared at 0 dB drive with the shaper disengaged? No - with
         // drive engaged and a *constant* input, where the oversampler is
         // transparent once settled.
         let mut effect = make();

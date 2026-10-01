@@ -3,7 +3,7 @@
 //!
 //! # What it does
 //!
-//! The signal is convolved with a stored **impulse response** 鈥?a recording of
+//! The signal is convolved with a stored **impulse response** - a recording of
 //! how a real space, plate or spring answers a click. That is the only way to
 //! reproduce a *specific* room: an algorithmic network can be tuned until it
 //! sounds plausible, but it cannot sound like the hall the user recorded in.
@@ -13,14 +13,14 @@
 //! # Why partitioned, and why the FFT
 //!
 //! A direct convolution of a 5-second IR at 48 kHz costs 240 000 multiply-adds
-//! *per output sample* 鈥?around 11.5 GFLOP/s for one channel, which no
+//! *per output sample* - around 11.5 GFLOP/s for one channel, which no
 //! real-time budget survives. Two standard tricks make it affordable, and this
 //! module uses both:
 //!
 //! 1. **FFT convolution.** The transform turns convolution into pointwise
 //!    multiplication, so a block of `B` output samples against a partition of
 //!    `B` IR samples costs one forward transform, `B` complex multiplies and
-//!    one inverse transform 鈥?`O(B log B)` instead of `O(B虏)`.
+//!    one inverse transform - `O(B log B)` instead of `O(B^2)`.
 //! 2. **Uniform partitioning.** The IR is cut into `P` partitions of `B`
 //!    samples each. Each partition's spectrum is computed **once**, in
 //!    `prepare` or in `load_impulse_response`, and stored. Partition `p` is
@@ -35,17 +35,17 @@
 //! wraps onto another, and the total output window of length `2B` contains
 //! `B` samples of "current" output and `B` samples that belong to the next
 //! block. Those `B` trailing samples are the **overlap**, saved and added to
-//! the head of the next block's result 鈥?which is why the method is called
+//! the head of the next block's result - which is why the method is called
 //! overlap-save.
 //!
 //! # No dependencies, so the FFT lives here
 //!
 //! The crate has no dependencies and must keep none, so the radix-2
 //! Cooley-Tukey transform below is our own. It follows the structure of the
-//! analyser in `effects::eq::spectrum` 鈥?bit-reversal permutation, then
-//! butterflies with precomputed twiddles 鈥?but keeps its own copy of the
+//! analyser in `effects::eq::spectrum` - bit-reversal permutation, then
+//! butterflies with precomputed twiddles - but keeps its own copy of the
 //! tables: the analyser's are private to it, its transform size is different,
-//! and its Hann window must never be applied to an impulse response (window a
+//! and its Hann window must never be applied to an impulse response (window an
 //! IR and you have convolved with a smeared version of it).
 //!
 //! # Reported latency, and why it is the partition size
@@ -53,11 +53,11 @@
 //! The scheme collects a whole partition of input before it can transform it,
 //! so no output can be produced until block `n`'s input is complete. When block
 //! `n` completes, the convolution produces the response to blocks `n, n-1,
-//! 鈥?n-P+1`. The dry/wet alignment the engine needs is: *for an impulse at
+//! ... n-P+1`. The dry/wet alignment the engine needs is: *for an impulse at
 //! input sample 0, at which output sample does the response appear?*
 //!
 //! The impulse sits in block 0. Its response is only computed once block 0 is
-//! complete 鈥?that is, once `PARTITION` input samples have been consumed. The
+//! complete - that is, once `PARTITION` input samples have been consumed. The
 //! first output sample of that response is therefore emitted at output index
 //! `PARTITION`, and the impulse's own position (input index 0) maps to output
 //! index `PARTITION`. So
@@ -79,7 +79,7 @@
 //! [`ConvolutionReverb::prepare`]. `process` performs no allocation: the IR is
 //! partitioned once, and a block only ever indexes what `prepare` laid out.
 //! [`ConvolutionReverb::load_impulse_response`] is a **control thread**
-//! operation 鈥?the UI calls it when the user picks a file 鈥?and it refuses an
+//! operation - the UI calls it when the user picks a file - and it refuses an
 //! IR larger than the capacity rather than growing in the audio thread.
 
 use super::super::buffer::{AudioBuffer, RenderContext};
@@ -96,7 +96,7 @@ use crate::automation::parameter::{
 pub const PARAM_PREDELAY: u16 = 0;
 /// Wet gain in decibels.
 pub const PARAM_WET_GAIN: u16 = 1;
-/// Fraction of the IR tail kept, in percent 鈥?a length and decay trim.
+/// Fraction of the IR tail kept, in percent - a length and decay trim.
 pub const PARAM_IR_LENGTH: u16 = 2;
 /// Low-pass corner on the wet path, in hertz.
 pub const PARAM_LOW_PASS: u16 = 3;
@@ -141,16 +141,10 @@ const DEFAULT_IR_SECONDS: f32 = 1.5;
 
 /// Decay time constant of the built-in impulse response's envelope, in seconds.
 ///
-/// The envelope is `exp(-3路t/T)`, which reaches -60 dB at `4.6路T` 鈮?1.6 s 鈥?/// near enough to [`DEFAULT_IR_SECONDS`] that the placeholder tail is genuinely
+/// The envelope is `exp(-3*t/T)`, which reaches -60 dB at `4.6*T` = 1.6 s -
+/// near enough to [`DEFAULT_IR_SECONDS`] that the placeholder tail is genuinely
 /// silent at its end rather than being cut mid-decay, which would click.
 const DEFAULT_IR_DECAY: f32 = 0.35;
-
-/// This effect's contribution to the reported latency, in milliseconds.
-///
-/// Kept next to [`PARTITION`] so a reader can see the two together; PDC reads
-/// the sample count through [`EffectProcessor::latency_samples`], not from
-/// here.
-const LATENCY_MS_AT_48K: f32 = PARTITION as f32 * 1000.0 / 48_000.0;
 
 /// The seed for the built-in impulse response's noise generator.
 ///
@@ -200,7 +194,7 @@ pub static DESCRIPTOR: EffectDescriptor = EffectDescriptor {
 /// reverb sound like a particular space lives in the impulse response, so these
 /// parameters only shape how that response is *presented*: how loud, how long,
 /// how far behind the dry signal, and how band-limited. A "damping" or
-/// "diffusion" control would be a lie 鈥?those are properties of the IR, and
+/// "diffusion" control would be a lie - those are properties of the IR, and
 /// offering them would imply the effect can change them.
 #[must_use]
 pub fn parameter_table(address: ParameterAddress) -> [ParameterDescriptor; PARAM_COUNT as usize] {
@@ -324,7 +318,7 @@ impl Fft {
     ///
     /// The inverse is the conjugated forward transform with a `1/N` scale,
     /// which is the standard pair. Getting the scaling wrong here is invisible
-    /// in a spectrum display but is a level error of `N` in a convolution 鈥?so
+    /// in a spectrum display but is a level error of `N` in a convolution - so
     /// `a_unit_impulse_reproduces_the_ir_exactly` would catch it immediately.
     fn transform(&self, re: &mut [f32], im: &mut [f32], inverse: bool) {
         for n in 0..FFT_SIZE {
@@ -344,10 +338,8 @@ impl Fft {
                 let mut k = 0;
                 let mut offset = 0;
                 while k < half {
-                    let (mut wr, mut wi) = self.twiddles[offset];
-                    if inverse {
-                        wi = -wi;
-                    }
+                    let (wr, twiddle_im) = self.twiddles[offset];
+                    let wi = if inverse { -twiddle_im } else { twiddle_im };
                     let i = start + k;
                     let j = i + half;
                     let tr = re[j] * wr - im[j] * wi;
@@ -384,7 +376,7 @@ struct Convolver {
     ir_im: alloc::vec::Vec<f32>,
     /// How many partitions of the IR are actually in use.
     partitions: usize,
-    /// Input spectra for the last `capacity_partitions` blocks, oldest at the
+    /// Input spectra for the last `capacity_partitions` blocks, newest at the
     /// cursor. Indexed as the IR's partitions are: slot `(cursor - p) mod cap`.
     history_re: alloc::vec::Vec<f32>,
     /// Imaginary half of the input history.
@@ -477,7 +469,7 @@ pub struct ConvolutionReverb {
     /// FFT scratch, imaginary part.
     scratch_im: alloc::vec::Vec<f32>,
     /// The `FFT_SIZE`-sample input window: the previous block's samples in the
-    /// first half, this block's in the second.
+    /// second half, this block's in the first.
     window: alloc::vec::Vec<f32>,
     /// The IR itself, kept so a later trim or a sample-rate change can
     /// re-partition it. Bounded by the capacity `prepare` allocated.
@@ -494,6 +486,12 @@ pub struct ConvolutionReverb {
     dry: alloc::vec::Vec<f32>,
     /// Preallocated wet working buffer, `max_block`.
     wet_buf: alloc::vec::Vec<f32>,
+    /// Per-channel wet output for the block being consumed, `max_block`.
+    ///
+    /// The transform engine advances once per block for every channel at once,
+    /// so each channel's share of the current partition is buffered here before
+    /// its own filters and crossfade run.
+    wet_output: [alloc::vec::Vec<f32>; MAX_CHANNELS],
     /// Preallocated pre-delayed block, `max_block`.
     predelayed: alloc::vec::Vec<f32>,
     /// Channels currently active.
@@ -545,6 +543,7 @@ impl ConvolutionReverb {
             bypassed: false,
             dry: alloc::vec::Vec::new(),
             wet_buf: alloc::vec::Vec::new(),
+            wet_output: [alloc::vec::Vec::new(), alloc::vec::Vec::new()],
             predelayed: alloc::vec::Vec::new(),
             active_channels: MAX_CHANNELS,
             max_block: 0,
@@ -585,7 +584,7 @@ impl ConvolutionReverb {
     ///
     /// # Errors
     ///
-    /// * [`IrError::Empty`] for an empty slice 鈥?convolving with nothing is not
+    /// * [`IrError::Empty`] for an empty slice - convolving with nothing is not
     ///   a reverb, and silently leaving the previous IR loaded would be a
     ///   surprising side effect of a failed load.
     /// * [`IrError::NotPrepared`] before [`EffectProcessor::prepare`], when
@@ -624,7 +623,7 @@ impl ConvolutionReverb {
     /// reopens must sound the same, and a test that compares a tail against a
     /// recorded value would otherwise be testing the weather.
     ///
-    /// The envelope is `exp(-3路t/T)`, which falls by 60 dB at `4.6路T` 鈥?chosen
+    /// The envelope is `exp(-3*t/T)`, which falls by 60 dB at `4.6*T` - chosen
     /// so the burst is genuinely silent by [`DEFAULT_IR_SECONDS`] rather than
     /// being cut off mid-decay, which would click.
     #[must_use]
@@ -639,7 +638,7 @@ impl ConvolutionReverb {
             // the top and mapped to -1..1.
             state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let noise = (state >> 8) as f32 / 8_388_608.0 - 1.0;
-            // `exp(-3路t/T)` written as `exp2(-3路t/(T路ln2))`, through the shared
+            // `exp(-3*t/T)` written as `exp2(-3*t/(T*ln2))`, through the shared
             // `exp2` rather than `f32::exp`, which is banned for wasm.
             let envelope = exp2(-3.0 * index as f32 / (denominator * core::f32::consts::LN_2));
             *sample = noise * envelope * 0.5;
@@ -698,7 +697,7 @@ impl ConvolutionReverb {
         }
     }
 
-    /// Redesigns the two wet-path filters if their corners moved.
+    /// Redesigns the two wet-path filters.
     fn redesign_wet_filters(&mut self) {
         for convolver in self.convolvers.iter_mut() {
             convolver.low_pass.design(
@@ -724,24 +723,22 @@ impl ConvolutionReverb {
     /// The heart of the overlap-save method, and the only place the FFT is
     /// touched per block:
     ///
-    /// 1. the `FFT_SIZE` window is the previous block followed by this block;
+    /// 1. the `FFT_SIZE` window is this block followed by the previous one;
     /// 2. one forward transform gives this block's input spectrum;
     /// 3. it is pushed into the history ring and multiplied against every IR
-    ///    partition spectrum, oldest input against first partition;
+    ///    partition spectrum, newest input against first partition;
     /// 4. one inverse transform gives `FFT_SIZE` time samples, of which the
-    ///    *first* `PARTITION` are valid output (the rest are the wraparound
-    ///    from circular convolution and are discarded 鈥?the "save" half of the
-    ///    name is that the *previous* block's discards were added in).
+    ///    first `PARTITION` are this block's valid output and the second are
+    ///    the wraparound from circular convolution, saved as the overlap the
+    ///    next call consumes.
     fn run_transform(&mut self) {
         let frames = PARTITION;
 
-        // 鈹€鈹€ 1 & 2: window + forward transform 鈹€鈹€
-        // `window` holds the previous block's samples in its second half (left
-        // there by the previous call) and this block's in its first half, so
-        // the transform sees `[block n | block n-1]`. Overlap-save cares only
-        // that both blocks are present and in order; the half they occupy
-        // determines which half of the inverse transform is valid, and the
-        // convention is fixed by the reads below.
+        // -- 1 and 2: window + forward transform --
+        // `window` holds this block's samples in its first half (written by
+        // `process` just before this call) and the previous block's in its
+        // second half (left there by the previous call's shift), so the
+        // transform sees `[block n | block n-1]`.
         for convolver in self.convolvers.iter_mut() {
             convolver.accum_re.iter_mut().for_each(|s| *s = 0.0);
             convolver.accum_im.iter_mut().for_each(|s| *s = 0.0);
@@ -752,7 +749,7 @@ impl ConvolutionReverb {
         im.iter_mut().for_each(|sample| *sample = 0.0);
         self.fft.transform(re, im, false);
 
-        // 鈹€鈹€ 3: push into the history and accumulate the products 鈹€鈹€
+        // -- 3: push into the history and accumulate the products --
         let capacity = self.capacity_partitions;
         let active = self.active_channels.min(MAX_CHANNELS);
         for channel in 0..active {
@@ -785,23 +782,25 @@ impl ConvolutionReverb {
             }
         }
 
-        // 鈹€鈹€ 4: inverse transform, then overlap-add 鈹€鈹€
+        // -- 4: inverse transform, then overlap-add --
         for channel in 0..active {
             let convolver = &mut self.convolvers[channel];
             let (re, im) = (&mut convolver.accum_re, &mut convolver.accum_im);
             self.fft.transform(re, im, true);
-            // Because the window was `[block n | block n-1]`, the *second* half
+            // Because the window was `[block n | block n-1]`, the *first* half
             // of the circular convolution holds block n's contribution and the
-            // first half holds the wraparound plus block n-1's tail. So this
-            // block's output is the second half, with the samples discarded
-            // from the previous call's second half 鈥?saved in `overlap` 鈥?            // added to it.
+            // second half holds the wraparound that belongs to the next block.
+            // (With both sequences `PARTITION` long, the wrap only ever starts
+            // at index `PARTITION`, so no wraparound can land in the first
+            // half.) This block's output is therefore the first half, with the
+            // wrap saved from the previous call's second half added in.
             for index in 0..frames {
-                let value = re[frames + index] + self.overlap[channel][index];
+                let value = re[index] + self.overlap[channel][index];
                 self.output[channel][index] = if value.is_finite() { value } else { 0.0 };
             }
-            // The first half is what the *next* block will need: save it.
+            // The second half is what the *next* block will need: save it.
             for index in 0..frames {
-                let value = re[index];
+                let value = re[frames + index];
                 self.overlap[channel][index] = if value.is_finite() { value } else { 0.0 };
             }
             convolver.history_cursor = (convolver.history_cursor + 1) % capacity;
@@ -809,9 +808,9 @@ impl ConvolutionReverb {
         for channel in active..MAX_CHANNELS {
             self.output[channel].iter_mut().for_each(|s| *s = 0.0);
         }
-        // The old first half must become the new second half, so the next
-        // call's window is `[block n+1 | block n]`. Done once, not per channel:
-        // the window is shared by both channels' spectra.
+        // This block's samples must become the next window's "previous block",
+        // so the next call's window is `[block n+1 | block n]`. Done once, not
+        // per channel: the window is shared by both channels' spectra.
         self.window.copy_within(0..PARTITION, PARTITION);
     }
 }
@@ -833,6 +832,9 @@ impl EffectProcessor for ConvolutionReverb {
         // Every allocation this effect will ever make happens here.
         self.dry = alloc::vec![0.0; max_block];
         self.wet_buf = alloc::vec![0.0; max_block];
+        for channel in 0..MAX_CHANNELS {
+            self.wet_output[channel] = alloc::vec![0.0; max_block];
+        }
         self.predelayed = alloc::vec![0.0; max_block];
         self.block = alloc::vec![0.0; PARTITION];
         self.window = alloc::vec![0.0; FFT_SIZE];
@@ -865,7 +867,7 @@ impl EffectProcessor for ConvolutionReverb {
         self.predelay_data = alloc::vec![0.0; self.predelay_capacity];
 
         // A built-in impulse response, so the effect is usable the moment it is
-        // dropped into a slot 鈥?before the user has found a file. Deterministic
+        // dropped into a slot - before the user has found a file. Deterministic
         // and documented, not a random placeholder.
         let default_ir = Self::default_impulse_response(self.sample_rate);
         let count = default_ir.len().min(self.ir.len());
@@ -877,7 +879,7 @@ impl EffectProcessor for ConvolutionReverb {
         self.partition_impulse_response();
     }
 
-    fn process(&mut self, buffer: &mut AudioBuffer<'_>, ctx: &RenderContext) {
+    fn process(&mut self, buffer: &mut AudioBuffer<'_>, _ctx: &RenderContext) {
         if self.bypassed {
             return;
         }
@@ -900,61 +902,78 @@ impl EffectProcessor for ConvolutionReverb {
         let wet = self.wet;
         let wet_gain = db_to_gain(self.wet_gain_db);
 
-        for channel in 0..channels {
+        // -- Pre-delay --
+        // One ring per block, fed from channel 0: the pre-delay belongs to the
+        // room, not to the channel, and both channels convolve the same delayed
+        // signal.
+        {
+            let delay = (self.predelay_ms * self.sample_rate / 1000.0)
+                .clamp(0.0, (self.predelay_capacity - 1) as f32) as usize;
+            let capacity = self.predelay_capacity;
+            for index in 0..frames {
+                let sample = buffer
+                    .channel(0)
+                    .and_then(|channel| channel.get(index))
+                    .copied()
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(0.0);
+                let write = self.predelay_cursor;
+                let read = (write + capacity - delay) % capacity;
+                self.predelay_data[write] = sample;
+                self.predelayed[index] = self.predelay_data[read];
+                self.predelay_cursor = (write + 1) % capacity;
+            }
+        }
+
+        // -- Partitioned convolution --
+        // The engine advances **once per block, for every channel**: the
+        // transform window and the input history are properties of the signal,
+        // not of a channel, so running this inside the per-channel loop would
+        // transform the same block twice and corrupt the shared state. A
+        // partition of output is produced for all active channels at once and
+        // buffered per channel.
+        //
+        // Output is read *before* a completed partition is allowed to be
+        // consumed, so the sample that completes a partition is still served by
+        // the partition being drained. Consuming the fresh transform in the
+        // same iteration would advance the wet path one sample early, which
+        // `an_impulse_starts_at_exactly_the_reported_latency` catches.
+        for index in 0..frames {
+            let sample = self.predelayed[index];
+            self.block[self.block_filled] = if sample.is_finite() { sample } else { 0.0 };
+            self.block_filled += 1;
+            for channel in 0..channels.min(MAX_CHANNELS) {
+                let wet_sample = self.output[channel][self.output_read];
+                self.wet_output[channel][index] = wet_sample;
+            }
+            self.output_read += 1;
+            if self.block_filled == PARTITION {
+                // The window is this block followed by the previous one: the
+                // previous block's samples are already sitting in the second
+                // half (moved there by the last call's shift), so only the first
+                // half needs writing.
+                self.window[..PARTITION].copy_from_slice(&self.block);
+                self.run_transform();
+                self.block_filled = 0;
+                self.output_read = 0;
+            }
+        }
+
+        // -- Per-channel wet filters, then the wet/dry crossfade --
+        for channel in 0..channels.min(MAX_CHANNELS) {
             {
                 let Some(source) = buffer.channel(channel) else {
                     continue;
                 };
                 self.dry[..frames].copy_from_slice(source);
             }
-
-            // 鈹€鈹€ Pre-delay 鈹€鈹€
-            // One ring per block, written from channel 0: the pre-delay belongs
-            // to the room, not to the channel, and both channels convolve the
-            // same delayed signal.
-            if channel == 0 {
-                let delay = (self.predelay_ms * self.sample_rate / 1000.0)
-                    .clamp(0.0, (self.predelay_capacity - 1) as f32)
-                    as usize;
-                let capacity = self.predelay_capacity;
-                for index in 0..frames {
-                    let sample = self.dry[index];
-                    let write = self.predelay_cursor;
-                    let read = (write + capacity - delay) % capacity;
-                    self.predelay_data[write] = sample;
-                    self.predelayed[index] = self.predelay_data[read];
-                    self.predelay_cursor = (write + 1) % capacity;
-                }
-            }
-
-            // 鈹€鈹€ Partitioned convolution 鈹€鈹€
-            // Collect `PARTITION` samples, then run exactly one transform pair.
-            // The result lands in `wet_buf`, one sample per consumed input
-            // sample: either a fresh partition just came out of the transform,
-            // or the previous one is still being drained.
-            for index in 0..frames {
-                let sample = self.predelayed[index];
-                self.block[self.block_filled] = if sample.is_finite() { sample } else { 0.0 };
-                self.block_filled += 1;
-                if self.block_filled == PARTITION {
-                    // The window is the previous block followed by this one:
-                    // the old second half is already the old block's samples,
-                    // so the new block goes into the first half.
-                    self.window[..PARTITION].copy_from_slice(&self.block);
-                    self.run_transform();
-                    self.block_filled = 0;
-                    self.output_read = 0;
-                }
-                self.wet_buf[index] = self.output[channel][self.output_read];
-                self.output_read += 1;
-            }
-            // Run the wet-path filters after the block, so a filter never has
-            // to be advanced one sample at a time inside the partition loop.
+            self.wet_buf[..frames].copy_from_slice(&self.wet_output[channel][..frames]);
+            // Run the wet-path filters after the block, so a filter never has to
+            // be advanced one sample at a time inside the partition loop.
             if let Some(convolver) = self.convolvers.get_mut(channel) {
                 convolver.low_pass.process_slice(&mut self.wet_buf[..frames]);
                 convolver.high_pass.process_slice(&mut self.wet_buf[..frames]);
             }
-
             if let Some(destination) = buffer.channel_mut(channel) {
                 for (index, out) in destination.iter_mut().enumerate() {
                     let wet_sample = self.wet_buf.get(index).copied().unwrap_or(0.0) * wet_gain;
@@ -972,6 +991,7 @@ impl EffectProcessor for ConvolutionReverb {
         for channel in 0..MAX_CHANNELS {
             self.output[channel].iter_mut().for_each(|s| *s = 0.0);
             self.overlap[channel].iter_mut().for_each(|s| *s = 0.0);
+            self.wet_output[channel].iter_mut().for_each(|s| *s = 0.0);
         }
         self.block.iter_mut().for_each(|s| *s = 0.0);
         self.window.iter_mut().for_each(|s| *s = 0.0);
@@ -1112,9 +1132,15 @@ mod tests {
     }
 
     /// The full left-channel output of a fully wet impulse, for `frames`.
+    ///
+    /// The wet-path filters are opened fully: they are a deliberate part of the
+    /// effect's colour, and a test that measures the *convolution* must not
+    /// also be measuring a 20 Hz high-pass eating the impulse.
     fn impulse_response(effect: &mut ConvolutionReverb, frames: usize) -> alloc::vec::Vec<f32> {
         effect.set_wet(1.0);
         effect.set_parameter(PARAM_WET_GAIN, 0.0);
+        effect.set_parameter(PARAM_LOW_PASS, 20_000.0);
+        effect.set_parameter(PARAM_HIGH_PASS, 20.0);
         let chunk = 256;
         let blocks = frames.div_ceil(chunk);
         let mut tail = alloc::vec![0.0_f32; blocks * chunk];
@@ -1164,7 +1190,10 @@ mod tests {
     fn the_descriptor_identity_is_stable() {
         let effect = make();
         let d = effect.descriptor();
-        assert_eq!(d.kind, super::super::super::registry::KIND_REVERB_CONVOLUTION);
+        assert_eq!(
+            d.kind,
+            super::super::super::registry::KIND_REVERB_CONVOLUTION
+        );
         assert_eq!(d.key, "reverb_convolution");
         assert_eq!(d.label, "Convolution Reverb");
         assert_eq!(d.category, EffectCategory::Reverb);
@@ -1353,7 +1382,7 @@ mod tests {
         assert_eq!(effect.get_parameter(PARAM_MIX), Some(0.0));
     }
 
-    // ── The correctness tests that matter ──
+    // -- The correctness tests that matter --
 
     #[test]
     fn convolving_with_a_unit_impulse_reproduces_the_ir_exactly() {
@@ -1361,7 +1390,7 @@ mod tests {
         // followed by zeros) convolved with the IR must give back the IR, one
         // sample per sample, offset by the reported latency. This validates the
         // partition bookkeeping, the overlap-save indexing and the FFT together
-        // — any of them being wrong shows up here as a shifted or scaled
+        // - any of them being wrong shows up here as a shifted or scaled
         // result.
         let mut effect = make();
         // A hand-built IR of exactly two partitions, so the second partition's
@@ -1369,7 +1398,8 @@ mod tests {
         let mut ir = alloc::vec![0.0_f32; PARTITION * 2];
         for (index, sample) in ir.iter_mut().enumerate() {
             // A deterministic, non-trivial pattern: a decaying oscillation.
-            *sample = sin_poly(2.0 * PI * 0.05 * index as f32) * exp2(-index as f32 / 512.0) * 0.8;
+            *sample =
+                sin_poly(2.0 * PI * 0.05 * index as f32) * exp2(-(index as f32) / 512.0) * 0.8;
         }
         effect
             .load_impulse_response(&ir)
@@ -1509,13 +1539,13 @@ mod tests {
 
     #[test]
     fn a_long_impulse_response_does_not_blow_up() {
-        // A ten-second IR is the worst case the capacity allows: it is 1875
-        // partitions, each contributing a complex multiply per bin per block.
-        // The output must stay finite and bounded.
+        // A five-second IR is far beyond the default and exercises the
+        // partition loop at a realistic worst case. The output must stay
+        // finite and bounded.
         let mut effect = make();
         let length = (5.0 * SR) as usize;
         let ir: alloc::vec::Vec<f32> = (0..length)
-            .map(|n| sin_poly(2.0 * PI * 0.01 * n as f32) * exp2(-n as f32 / (2.0 * SR)) * 0.5)
+            .map(|n| sin_poly(2.0 * PI * 0.01 * n as f32) * exp2(-(n as f32) / (2.0 * SR)) * 0.5)
             .collect();
         effect
             .load_impulse_response(&ir)
@@ -1699,7 +1729,7 @@ mod tests {
     fn the_wet_path_low_pass_and_high_pass_shape_the_tail() {
         // The two wet-path filters are the only spectral controls worth
         // offering, since the character lives in the IR. Measure their effect
-        // through a white-spectrum IR so the source is flat.
+        // through a unit IR so the source is flat.
         let band_energies = |low: f32, high: f32| -> (f32, f32) {
             let mut effect = make();
             // A unit impulse IR: the output is the input, so the filters act on
@@ -1756,11 +1786,11 @@ mod tests {
         // Energy in the first quarter only: trimming to 25 % must keep it,
         // trimming to nothing near it must drop it.
         for (index, sample) in ir[..length / 4].iter_mut().enumerate() {
-            *sample = sin_poly(2.0 * PI * 0.02 * index as f32) * exp2(-index as f32 / 4096.0);
+            *sample = sin_poly(2.0 * PI * 0.02 * index as f32) * exp2(-(index as f32) / 4096.0);
         }
         effect.load_impulse_response(&ir).expect("two seconds fits");
 
-        let tail_energy = |percent: f32| -> f32 {
+        let mut tail_energy = |percent: f32| -> f32 {
             effect.set_parameter(PARAM_IR_LENGTH, percent);
             let output = impulse_response(&mut effect, PARTITION * 24);
             let mut sum = 0.0_f32;
@@ -1949,7 +1979,9 @@ mod tests {
         // the same tail on both sides. A per-channel IR that drifted would show
         // up as a stereo image shift with nothing in the input to explain it.
         let mut effect = make();
-        effect.load_impulse_response(&[0.25, 0.5, 0.25]).expect("fits");
+        effect
+            .load_impulse_response(&[0.25, 0.5, 0.25])
+            .expect("fits");
         effect.set_wet(1.0);
         let chunk = 256;
         let mut left = alloc::vec![0.0_f32; chunk];
@@ -1977,4 +2009,3 @@ mod tests {
         }
     }
 }
-
