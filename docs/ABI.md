@@ -15,13 +15,15 @@
 >   `zenith_version_string()`，端到端已验证 `flutter build windows --debug`
 >   会链接 Rust 静态库并把 `zenith_core.dll` 落在 exe 同级目录。
 > - **S2**：参数与自动化，`native/zenith_core/src/ffi/param_api.rs` 导出
->   **45 个 `zenith_automation_*` 函数** + §6.4 列出的 6 个 `zenith_sizeof_*`、
->   2 个边界查询与 1 个 flag 掩码查询。核心实现在
->   `native/zenith_core/src/automation/`（7 个模块，268 个单元测试）。
+>   **52 个 `zenith_automation_*` 函数**（含 §6.4 列出的 6 个 `zenith_sizeof_*`、
+>   2 个平滑边界查询与 1 个 flag 掩码查询）。核心实现在
+>   `native/zenith_core/src/automation/`（7 个模块，316 项测试）。
 >
-> `ABI_VERSION = 0x000200`（**0.2.0**）。0.1.0 → 0.2.0 为 **minor** 提升：
-> 仅**新增**导出函数与结构体，未改动任何既有签名、字段顺序或枚举判别值，
-> 符合 §2.2 的向后兼容规则。提案登记于 `docs/COORDINATION.md` C-002。
+> `ABI_VERSION` 的 minor 计数是**所有 agent 共享的单一线性序列**，不是每阶段
+> 一个号：S2 占用 `0.2.0`（0x000200），S3 混音器随后占用 `0.3.0`（0x000300），
+> 故当前值为 **0.3.0**。每次提升均为 **minor**：仅**新增**导出函数与结构体，
+> 未改动任何既有签名、字段顺序或枚举判别值，符合 §2.2 的向后兼容规则。
+> 提案登记于 `docs/COORDINATION.md` C-002（S2）与 C-004（S3）。
 >
 > 因此：本文件中标注 **[S0 落地]** / **[S2 落地]** 的条目是**已实现事实**；
 > 其余（`[S1]`/`[S3]`/`[S4]`/`[S5]`/`[S6]`）仍是目标契约。DSP 图、sequencer、
@@ -361,7 +363,7 @@ ZenithStatusCode zenith_engine_status(const ZenithEngine* engine,
 > `ZenithEngine*`（或提供一层转发），Dart 侧调用点不需要改写。
 > 详见 `docs/stages/s2-report.md` 的「与 S1 的接线」一节。
 >
-> 本节实际导出 **45 个函数**，全部在 `native/zenith_core/src/ffi/param_api.rs`。
+> 本节实际导出 **52 个函数**，全部在 `native/zenith_core/src/ffi/param_api.rs`。
 
 ```c
 /* 参数紧凑寻址：热路径不做字符串哈希（PLAN §3.S2 第 1 条）。
@@ -766,7 +768,7 @@ cargo test
 |---|---|---|---|
 | v1.0 | — | 首次冻结：确立 10 条设计原则、版本策略、类型映射、错误码、所有权模型、函数面清单、线程模型、构建产物、同步验证机制 | S0 契约基线 |
 | v1.0.1 | — | 补充 S0 实际落地状态（仅版本三件套已实现） | S0 |
-| v1.1 | 2026-10-04 | S2 参数与自动化落地：`ABI_VERSION` 0.1.0 → 0.2.0（minor，纯追加）；§6.4 重写为实际契约（45 个 `zenith_automation_*` 函数 + 独立句柄 `ZenithAutomation`）；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警 | Agent-C（S2） |
+| v1.1 | 2026-10-04 | S2 参数与自动化落地：新增 52 个 `zenith_automation_*` 函数与独立句柄 `ZenithAutomation`（占用 minor `0.2.0`）；§6.4 重写为实际契约；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警。**注**：minor 计数为全 agent 共享的单一线程序列，S3 随后占用 `0.3.0`，故 `ABI_VERSION` 当前为后者 | Agent-C（S2） |
 
 ---
 
