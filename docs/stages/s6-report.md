@@ -218,3 +218,28 @@ Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读�
 | `flutter test test/arrangement_geometry_test.dart` | ✅ **16 passed** |
 | `flutter test`（全仓） | ✅ **315 passed**（+16），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
 
+---
+
+## 10. 增补（2026-10-06，Agent-A）：S6b 音阶高亮与幽灵音符
+
+### 10.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/widgets/editor/piano_roll_view_model.dart` | **纯函数**：`ScaleHighlight`（音级集合、`contains` 按 pitch-class、`isRoot`、`snapUp`/`snapDown`）、`ghostNotes`（按音高范围裁剪并按起始排序）、`noteSpanFraction`、`notesByPitch`、`scaleForKey`（解析 `"C"` / `"F#"` / `"Bb"`，minor 由调用方标志）。 |
+| `test/piano_roll_view_model_test.dart` | **20 项**。 |
+
+音阶高亮按 **pitch-class**（模 12）判定，因此八度等价；`snapUp`/`snapDown` 让「吸附到音阶」的画笔可约束到调内。幽灵音符（其他 Pattern 参考）按可见音高范围裁剪，画家不必再判边界。
+
+### 10.2 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/piano_roll_view_model_test.dart` | ✅ **20 passed** |
+| `flutter test`（全仓） | ✅ **352 passed**（+20），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 10.3 仍缺
+
+- 力度**画笔**（按 y 位置拖动写力度）与把上述 view-model 画进卷帘画布：属交互/绘制，未做。
+
