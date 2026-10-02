@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:zenith_audio/engine/ffi/engine_bindings.dart';
 import 'package:zenith_audio/engine/ffi/engine_types.dart';
 import 'package:zenith_audio/native/zenith_core.dart';
+import 'package:zenith_audio/services/wav_encoder.dart';
 
 /// S0: the FFI link probe.
 ///
@@ -129,6 +130,31 @@ void main() {
         return;
       }
       expect(engineDriverSupported(ZenithDriverKind.offline), isTrue);
+    });
+
+    test('[S4] offline rendering returns a WAV-encodable buffer', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final engine = ZenithEngineHandle.create(sampleRate: 48000, blockSize: 256);
+      expect(engine, isNotNull);
+      addTearDown(engine!.dispose);
+
+      // Render one beat (960 ticks) at 120 BPM = 24000 frames.
+      final samples = engine.renderOffline(startTicks: 0, endTicks: 960);
+      expect(samples, isNotNull);
+      expect(samples!.length, 24000 * 2, reason: 'interleaved stereo');
+
+      final wav = encodeWav(samples, channels: 2, sampleRate: 48000);
+      final header = probeWavHeader(wav);
+      expect(header, isNotNull);
+      expect(header!.channels, 2);
+      expect(header.sampleRate, 48000);
+      expect(header.dataBytes, 24000 * 2 * 2);
+
+      expect(engine.pdcLatency(), 0, reason: 'no effects => no PDC delay');
     });
   });
 }

@@ -5,7 +5,8 @@
 > 属于 `docs/PLAN_DAW_PARITY.md` §4.2 第 1、2 条所称的「接口契约」，
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
 > **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 补 S0 实际落地状态；
-> v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面；v1.3 补 S1 引擎/传输落地
+> v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面；v1.3 补 S1 引擎/传输落地；
+> v1.4 补 S4 离线渲染与 PDC 落地
 >
 > **当前实现状态（S0、S1、S2、S3、S5 已完成，2026-10-06 更新）**：
 > `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
@@ -705,7 +706,7 @@ ZenithStatusCode zenith_meter_read(const ZenithEngine*, uint32_t channel_index,
                                    ZenithMeterSnapshot* out_snapshot);
 ```
 
-### 6.8 离线渲染与导出（**[S4]**）
+### 6.8 离线渲染与导出（**[S4 落地]**）
 
 ```c
 ZenithStatusCode zenith_render_offline(ZenithEngine*, ZenithMusicalTime start,
@@ -718,6 +719,17 @@ void zenith_buffer_free(float* buffer, size_t frames);
 > **离线走同一个 `AudioDriver`（`OfflineDriver`）**，不是第二套 DSP 实现——
 > 这是「实时与离线逐样本一致」的结构保证（PLAN §3.S4 第 5 条）。
 > `zenith_buffer_free` 的存在是 P3 的直接体现。
+>
+> **S4 落地状态**：上述两个函数已实现（`src/ffi/render_api.rs`），并新增
+> `zenith_engine_pdc_latency`。`target_sample_rate` 仅接受 `0`（用引擎采样率）
+> 或引擎自身采样率；其余返回 `ZENITH_ERR_UNSUPPORTED`，**不做静默重采样**。
+> 返回缓冲由 Rust 分配（`Box<[f32]>`），Dart 必须以**相同的 `frames`** 调
+> `zenith_buffer_free` 释放。WAV 编码在 Dart 侧（`lib/services/wav_encoder.dart`）。
+
+```c
+/* 查询当前管线 PDC 延迟（样本数），供对齐渲染结果 */
+ZenithStatusCode zenith_engine_pdc_latency(const ZenithEngine*, uint32_t* out_latency);
+```
 
 ---
 
@@ -880,6 +892,7 @@ cargo test
 | v1.1 | 2026-10-04 | S2 参数与自动化落地：新增 52 个 `zenith_automation_*` 函数与独立句柄 `ZenithAutomation`（占用 minor `0.2.0`）；§6.4 重写为实际契约；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警。**注**：minor 计数为全 agent 共享的单一线程序列，S3 随后占用 `0.3.0`，故 `ABI_VERSION` 当前为后者 | Agent-C（S2） |
 | v1.2 | 2026-10-05 | S5 内置效果器查询面落地：新增 §6.5b 与 `zenith_effect_*` 系列共 15 个导出函数、`ZenithEffectDescriptor` 结构体、`zenith_effect_category` / `zenith_effect_kind_range` 常量镜像（占用 minor `0.4.0`，`ABI_VERSION` 当前为 `0.4.0`）；**偿还 §6.4 记录的 `zenith_effect_describe_params` 欠账**（拆为「静态侧问个数 + 实例侧取描述符」两条路径，理由是描述符内含取决于槽位的自动化地址）；§3.1 补 `ParameterUnit::Milliseconds`（纯追加判别值 7）；更正顶部过时的「S5 未落地」状态说明。**不涉及**任何效果 DSP 的跨语言调用——效果只经查询面暴露，UI 由描述符生成 | Agent-C（S5） |
 | v1.3 | 2026-10-06 | S1 实时引擎与传输落地：新增 `zenith_engine_create/destroy/start/stop/prepare`、`zenith_transport_play/pause/stop/seek/set_loop/set_tempo/set_time_signature`、`zenith_engine_render`、`zenith_engine_status`、`zenith_engine_driver_supported` 与 3 个 `zenith_sizeof_*`（占用 minor `0.5.0`，`ABI_VERSION` 当前为 `0.5.0`）；`ZenithMusicalTime` / `ZenithEngineConfig` / `ZenithEngineStatus` 三个结构体由「目标契约」转 **[S1 落地]**，尺寸在 §9.3 标注。§6.2/§6.3 由 `[S1]` 改为 **[S1 落地]**，并说明 `cpal` 为可选 feature、默认构建 `start` 返回 `UNSUPPORTED`。仅**新增**导出与**追加**结构体，无既有签名/字段序/判别值改动 | Agent-A（S1） |
+| v1.4 | 2026-10-06 | S4 离线渲染与 PDC 落地：`zenith_render_offline` / `zenith_buffer_free` 由目标契约转 **[S4 落地]**（`src/ffi/render_api.rs`），新增 `zenith_engine_pdc_latency`；`ABI_VERSION` 由 `0.5.0` 升至 **`0.6.0`**（占用 minor `0.6.0`）。§6.8 标注 **[S4 落地]** 并说明 `target_sample_rate` 不静默重采样、缓冲由 Rust 分配需配套释放。离线渲染复用同一 `render_block`，PDC 做通道间相对对齐。仅**新增**导出，无既有改动 | Agent-A（S4） |
 
 ---
 

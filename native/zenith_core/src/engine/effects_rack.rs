@@ -97,6 +97,34 @@ impl EffectRack {
         self.slots.is_empty()
     }
 
+    /// Total latency of `channel`'s effect chain, in samples.
+    ///
+    /// The sum of every processing slot's reported latency. Used by the engine's
+    /// PDC to align this channel against the deepest one (PLAN §3.S4 item 1).
+    #[must_use]
+    pub fn channel_latency(&self, channel: u32) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| s.channel == channel)
+            .map(|s| s.processor.latency_samples())
+            .sum()
+    }
+
+    /// The per-channel latency vector, indexed by channel id.
+    ///
+    /// `channel_count` is the highest channel id plus one; index `i` is channel
+    /// `i`'s total effect latency, or `0` when it has no processing slot.
+    #[must_use]
+    pub fn latency_by_channel(&self, channel_count: usize) -> alloc::vec::Vec<usize> {
+        let mut out = alloc::vec![0usize; channel_count];
+        for slot in &self.slots {
+            if let Some(entry) = out.get_mut(slot.channel as usize) {
+                *entry += slot.processor.latency_samples();
+            }
+        }
+        out
+    }
+
     /// Reconciles the live processors against `mixer`'s effect slots.
     ///
     /// Control thread only: this allocates and instantiates effects, so it must

@@ -23,4 +23,5 @@ pub mod effect_api;
 pub mod engine_api;
 pub mod mixer_api;
 pub mod param_api;
+pub mod render_api;
 pub mod types;

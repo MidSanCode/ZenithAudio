@@ -42,6 +42,15 @@ pub struct ZenithEngine {
 }
 
 impl ZenithEngine {
+    /// Wraps an engine in a handle.
+    ///
+    /// Crate-visible so the S4 render API's tests can construct a handle
+    /// directly; the product path is [`zenith_engine_create`].
+    #[allow(dead_code)]
+    pub(crate) fn from_engine(engine: Engine) -> Self {
+        Self { engine }
+    }
+
     /// The wrapped engine, for the crate's tests and future wiring.
     ///
     /// `dead_code` is expected in a non-test build: the mixer wiring that will

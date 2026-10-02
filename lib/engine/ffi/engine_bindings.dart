@@ -97,6 +97,31 @@ typedef _DriverSupportedDart = int Function(int);
 typedef _SizeofNative = Size Function();
 typedef _SizeofDart = int Function();
 
+// ── S4: offline rendering ──
+
+typedef _RenderOfflineNative = Int32 Function(
+  Pointer<Void>,
+  ZenithMusicalTime,
+  ZenithMusicalTime,
+  Uint32,
+  Pointer<Pointer<Float>>,
+  Pointer<Size>,
+);
+typedef _RenderOfflineDart = int Function(
+  Pointer<Void>,
+  ZenithMusicalTime,
+  ZenithMusicalTime,
+  int,
+  Pointer<Pointer<Float>>,
+  Pointer<Size>,
+);
+
+typedef _BufferFreeNative = Void Function(Pointer<Float>, Size);
+typedef _BufferFreeDart = void Function(Pointer<Float>, int);
+
+typedef _PdcLatencyNative = Int32 Function(Pointer<Void>, Pointer<Uint32>);
+typedef _PdcLatencyDart = int Function(Pointer<Void>, Pointer<Uint32>);
+
 /// An `Int32` result of `ZENITH_OK` means success for this surface.
 const int _ok = 0;
 
@@ -243,6 +268,65 @@ final class ZenithEngineHandle {
 
   /// Whether [dispose] has run.
   bool get isDisposed => _disposed;
+
+  // ── S4: offline rendering and PDC ──
+
+  /// Renders `[startTicks, endTicks)` to a fresh interleaved stereo buffer.
+  ///
+  /// Returns the samples as a [Float32List], or `null` when the core is
+  /// unavailable or the range is invalid. The native buffer is freed here
+  /// (ABI principle P3): the caller never sees the raw pointer.
+  ///
+  /// This is **not** real-time safe — it drives the transport and allocates the
+  /// whole output — so it belongs on a control/worker thread, not the audio
+  /// callback.
+  Float32List? renderOffline({
+    required int startTicks,
+    required int endTicks,
+    int targetSampleRate = 0,
+    int ppq = 960,
+  }) {
+    final start = _musicalTime(startTicks, ppq: ppq);
+    final end = _musicalTime(endTicks, ppq: ppq);
+    final outBuffer = calloc<Pointer<Float>>();
+    final outFrames = calloc<Size>();
+    try {
+      final code = _bindings.renderOffline(
+        _handle,
+        start.ref,
+        end.ref,
+        targetSampleRate,
+        outBuffer,
+        outFrames,
+      );
+      if (code != _ok) return null;
+      final pointer = outBuffer.value;
+      final frames = outFrames.value;
+      if (pointer == nullptr || frames == 0) return null;
+      // Copy out before freeing so the returned list owns its bytes.
+      final copy = Float32List.fromList(
+        pointer.asTypedList(frames * 2),
+      );
+      _bindings.bufferFree(pointer, frames);
+      return copy;
+    } finally {
+      calloc.free(start);
+      calloc.free(end);
+      calloc.free(outBuffer);
+      calloc.free(outFrames);
+    }
+  }
+
+  /// The engine's current delay-compensation latency, in samples.
+  int pdcLatency() {
+    final out = calloc<Uint32>();
+    try {
+      if (_bindings.pdcLatency(_handle, out) != _ok) return 0;
+      return out.value;
+    } finally {
+      calloc.free(out);
+    }
+  }
 }
 
 /// Reads the `zenith_sizeof_*` values for the S1 structs, or `null` when the
@@ -327,6 +411,16 @@ final class _EngineBindings {
         driverSupported = library
             .lookupFunction<_DriverSupportedNative, _DriverSupportedDart>(
           'zenith_engine_driver_supported',
+        ),
+        renderOffline = library
+            .lookupFunction<_RenderOfflineNative, _RenderOfflineDart>(
+          'zenith_render_offline',
+        ),
+        bufferFree = library.lookupFunction<_BufferFreeNative, _BufferFreeDart>(
+          'zenith_buffer_free',
+        ),
+        pdcLatency = library.lookupFunction<_PdcLatencyNative, _PdcLatencyDart>(
+          'zenith_engine_pdc_latency',
         );
 
   /// Resolves the bindings, or returns `null` when the core is unavailable or a
@@ -354,6 +448,9 @@ final class _EngineBindings {
   final _RenderDart render;
   final _StatusDart status;
   final _DriverSupportedDart driverSupported;
+  final _RenderOfflineDart renderOffline;
+  final _BufferFreeDart bufferFree;
+  final _PdcLatencyDart pdcLatency;
 }
 
 /// Whether the core can use `kind` on this build/platform.

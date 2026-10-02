@@ -264,4 +264,21 @@
 > `flutter test` **190 passed**（唯一失败为 Windows 专属 `registry_quoting_test.dart`）、
 > 构建 dylib 后 FFI 冒烟 **8 passed**。
 
+---
+
+### C-014 · ABI 新增 S4 离线渲染导出面（minor +1）+ 注册 `src/engine/{offline,pdc}.rs` 所有权
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S1/S4） |
+| **变更（自有目录，仅备查）** | 新增 `native/zenith_core/src/engine/offline.rs`（离线渲染：复用 `render_block`，同一 DSP 图，`OfflineDriver` 语义）、`src/engine/pdc.rs`（`PdcPlan` + `DelayLine`：按各通道效果链延迟做**相对对齐**）。均属 `src/engine/**`（Agent-A）。 |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/render_api.rs`（`zenith_render_offline` / `zenith_buffer_free` / `zenith_engine_pdc_latency` / `zenith_sizeof_*` 如需）；② `src/ffi/mod.rs` **追加一行** `pub mod render_api;`；③ `src/lib.rs` `ABI_VERSION` 由 `0.5.0` 升至 **`0.6.0`**。 |
+| **ABI 依据** | `docs/ABI.md` §2.2 纯新增；兑现 §6.8 既定契约（`zenith_render_offline` / `zenith_buffer_free` 的签名在 S0 已冻结）。 |
+| **新增导出函数** | `zenith_render_offline(engine, start, end, target_sample_rate, out_buffer, out_frames)`、`zenith_buffer_free(buffer, frames)`、`zenith_engine_pdc_latency(engine, out)`。 |
+| **实现范围声明** | 离线渲染**复用同一 `Engine::render_block`**，不存在第二套 DSP；PDC 以通道间**相对对齐**实现（含延迟效果的通道不再与其他通道错位）。绝对管线延迟等于最大效果延迟，实时与离线一致，故逐样本一致。WAV 编码（16/24/32-bit PCM 与 32-bit float）在 Dart 侧 `lib/services/offline_export.dart`。 |
+| **影响面** | 后续追加请用 `0.7.0`；Dart `kExpectedAbiVersion` 同步为 `0x000600`。 |
+| **回滚方式** | `git revert`；均为纯追加，可单独回退 S4 段。 |
+| **状态** | 🟢 已生效（门禁见 `docs/stages/s4-report.md`） |
+
 

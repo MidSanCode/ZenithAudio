@@ -50,6 +50,11 @@ pub use render_context::RenderContext;
 pub mod effects_rack;
 pub use effects_rack::EffectRack;
 
+pub mod offline;
+pub mod pdc;
+
+pub use pdc::PdcPlan;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
@@ -281,6 +286,8 @@ pub struct Engine {
     master_chain: DspGraph,
     /// Live effect processors for the mixer's occupied slots.
     effect_rack: EffectRack,
+    /// Delay compensation aligning channels that carry latency effects.
+    pdc: PdcPlan,
     /// Preallocated source bus fed by the voices, interleaved stereo.
     source: Vec<f32>,
     /// Preallocated master output, interleaved stereo.
@@ -325,6 +332,8 @@ impl Engine {
         master_chain.prepare(config.sample_rate as f32, max_block, 2);
         let mut effect_rack = EffectRack::new();
         effect_rack.prepare(config.sample_rate as f32, max_block);
+        let mut pdc = PdcPlan::new();
+        pdc.prepare(max_block, 2);
         let snapshot = EngineSnapshot::new(&EngineStatus {
             max_voices: DEFAULT_MAX_VOICES as u32,
             sample_rate: config.sample_rate,
@@ -340,6 +349,7 @@ impl Engine {
             automation: AutomationLayer::new(config.sample_rate as f32),
             master_chain,
             effect_rack,
+            pdc,
             source: alloc::vec![0.0; max_block * 2],
             output: alloc::vec![0.0; max_block * 2],
             chain_planar: alloc::vec![0.0; max_block * 2],
@@ -446,8 +456,34 @@ impl Engine {
     /// Call after any mixer edit that changes an effect slot's kind, and after
     /// a project load. Control thread only: this instantiates effects and
     /// allocates (ABI §7.3).
+    ///
+    /// Also recomputes delay compensation, because inserting an effect with
+    /// latency changes the alignment of every other channel.
     pub fn sync_effects(&mut self) {
         self.effect_rack.sync(&self.mixer);
+        self.recompute_pdc();
+    }
+
+    /// Recomputes the per-channel delay compensation from the effect rack.
+    ///
+    /// Control thread only.
+    pub fn recompute_pdc(&mut self) {
+        let channel_count = self.mixer.len().max(1);
+        let latencies = self.effect_rack.latency_by_channel(channel_count);
+        let live: alloc::vec::Vec<u32> = self.mixer.order().to_vec();
+        self.pdc.recompute(&latencies, live.into_iter());
+    }
+
+    /// The deepest channel latency, in samples; the pipeline's total PDC delay.
+    #[must_use]
+    pub const fn pdc_latency(&self) -> usize {
+        self.pdc.max_latency()
+    }
+
+    /// Clears effect and PDC state; call on seek.
+    pub fn reset_effects(&mut self) {
+        self.pdc.reset();
+        self.master_chain.reset();
     }
 
     /// Records that a device driver has been attached.
@@ -604,6 +640,7 @@ impl Engine {
         let Engine {
             mixer,
             effect_rack,
+            pdc,
             automation,
             sum_scratch,
             order_scratch,
@@ -640,9 +677,9 @@ impl Engine {
             let gl = level * phase * pl;
             let gr = level * phase * pr;
 
-            // Phase → fader → pan, then the effect rack, then metering. The
-            // order matches the strip design: effects see a levelled, panned
-            // stereo image (PLAN §3.S3 `strip.rs`).
+            // Phase → fader → pan, then the effect rack, then delay
+            // compensation, then metering. PDC after the effects aligns this
+            // channel with whichever channel has the deepest effect latency.
             if let Some(node) = mixer.node_mut(id) {
                 let cap = frames.min(node.buffer.len() / 2);
                 for i in 0..cap {
@@ -650,6 +687,7 @@ impl Engine {
                     node.buffer[i * 2 + 1] *= gr;
                 }
                 effect_rack.process(id, &mut node.buffer[..cap * 2], cap, &automation.store);
+                pdc.apply(id, &mut node.buffer[..cap * 2], cap);
                 node.meter
                     .accumulate(&node.buffer[..cap * 2], cap, sample_rate);
             }
