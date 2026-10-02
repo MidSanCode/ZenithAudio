@@ -286,7 +286,9 @@ extension ProjectIo on ProjectNotifier {
 
   /// Picks an `.lgdf` (or legacy `.zap`) project archive and loads it.
   /// Returns true when a project was loaded.
-  Future<bool> openProject() async {
+  Future<bool> openProject({
+    Future<bool> Function(ProjectProbe probe)? confirmMigration,
+  }) async {
     _pushUndo();
     _isDirty = false;
     stopAutoSave();
@@ -313,6 +315,21 @@ extension ProjectIo on ProjectNotifier {
         return false;
       }
 
+      // Probe the archive before opening so a migration wizard can tell the
+      // user what they are about to load. Detection is by content, not the
+      // extension, so a renamed file still opens correctly.
+      final probe = ProjectMigrationService.inspect(bytes, fileName: file.name);
+      if (!probe.isOpenable) {
+        AppLogger.e('Not a Zenith project archive: ${file.name} '
+            '(${probe.formatLabel})');
+        return false;
+      }
+      if ((probe.needsMigration || probe.documentVersion != null) &&
+          confirmMigration != null) {
+        final proceed = await confirmMigration(probe);
+        if (!proceed) return false;
+      }
+
       final serialized = await const ProjectSerializer().deserialize(bytes);
       if (serialized == null) {
         AppLogger.e('Failed to deserialize project');
@@ -324,7 +341,9 @@ extension ProjectIo on ProjectNotifier {
       // the LGDF directory for it.
       _currentFilePath = null;
       _isDirty = true;
-      AppLogger.i('Project loaded: ${state.name}');
+      AppLogger.i('Project loaded: ${state.name} '
+          '(format ${probe.formatLabel}'
+          '${probe.needsMigration ? ', migrated' : ''})');
       return true;
     } catch (e) {
       AppLogger.e('Failed to open project', e);

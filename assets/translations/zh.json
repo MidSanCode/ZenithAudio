@@ -218,6 +218,14 @@
   "degrade.feature.realtimeEffects": "实时效果链",
   "degrade.feature.extendedPolyphony": "扩展复音数",
 
+  "migration.title": "打开工程",
+  "migration.detected": "检测到格式：{format}",
+  "migration.project": "工程：{name}",
+  "migration.willUpgrade": "该工程使用较旧的格式，将被升级为当前格式。",
+  "migration.nonDestructive": "原始文件不会被修改；新格式仅在保存时写入。",
+  "migration.upgradeOpen": "升级并打开",
+  "migration.open": "打开",
+
   "common.ok": "确定",
 
   "settings.autoSave": "自动保存",

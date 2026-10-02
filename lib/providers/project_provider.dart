@@ -19,6 +19,7 @@ import '../core/utils/logger.dart';
 import '../engine/audio_engine_adapter.dart';
 import '../services/lgdf_format.dart';
 import '../services/project_serializer.dart';
+import '../services/project_migration.dart';
 import '../services/workspace_service.dart';
 import '../services/midi/smf_reader.dart';
 import '../services/midi/smf_writer.dart';

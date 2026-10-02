@@ -9,6 +9,7 @@ import '../../providers/playback_provider.dart';
 import '../editor/synth_editor_dialog.dart' show SynthEditorLauncher;
 import '../../services/file_service.dart';
 import '../../services/midi/smf_types.dart';
+import '../dialogs/project_migration_dialog.dart';
 import '../../services/audio_converter.dart';
 import '../../screens/settings_page.dart';
 import '../../screens/about_dialog.dart' as app;
@@ -54,7 +55,10 @@ class AudioMenuBar extends ConsumerWidget {
                 shortcut: 'shortcut.openProject'.tr(),
                 onTap: () async {
                   final notifier = ref.read(projectProvider.notifier);
-                  await notifier.openProject();
+                  await notifier.openProject(
+                    confirmMigration: (probe) =>
+                        confirmProjectMigration(context, probe),
+                  );
                 },
               ),
               MenuItem(

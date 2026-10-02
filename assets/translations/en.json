@@ -217,6 +217,14 @@
   "degrade.feature.realtimeEffects": "real-time effects",
   "degrade.feature.extendedPolyphony": "extended polyphony",
 
+  "migration.title": "Open project",
+  "migration.detected": "Detected format: {format}",
+  "migration.project": "Project: {name}",
+  "migration.willUpgrade": "This project uses an older format and will be upgraded to the current one.",
+  "migration.nonDestructive": "The original file is not modified; the new format is written only when you save.",
+  "migration.upgradeOpen": "Upgrade & open",
+  "migration.open": "Open",
+
   "common.ok": "OK",
 
   "settings.autoSave": "Auto Save",

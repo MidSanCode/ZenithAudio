@@ -14,7 +14,7 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 |---|---|
 | 移除旧依赖 `media_kit` | ⬜ 未做（需确认无引用；引擎未接线，贸然移除会静音） |
 | 构建固化：hook 在六平台 CI 稳定产出原生库 | 🟡 **新增 CI 守卫**：Rust clippy/test/wasm32、Dart analyze/test、六平台 `rustup target add` 由 `dtolnay/rust-toolchain` 承担 |
-| 迁移工具：旧 `.zap`/`.zaproj` 一键迁移向导 | 🟡 **格式检测与报告**完成；向导 UI 待做 |
+| 迁移工具：旧 `.zap`/`.zaproj` 一键迁移向导 | 🟡 **格式检测 + 报告 + 打开前确认向导 UI** 完成 |
 | A/B 工程对比 | ⬜ 未做 |
 | 性能：128 轨压力测试 | ⬜ 未做 |
 | 文档：用户手册/快捷键/架构/Rust 指南 | ⬜ 未做 |
@@ -52,6 +52,16 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 - 报告项目名、`document_version`、是否需要迁移、是否可打开、格式标签；
 - **永不抛异常**：损坏字节流报 `unknown`，向导的第一职责是清楚地说「这不是工程」；
 - `isFromNewerApp()` 在打开前预警「需要更新的应用」。
+
+### 2.3 迁移向导 UI
+
+`lib/widgets/dialogs/project_migration_dialog.dart`：在打开旧工程前显示检测到的格式、
+工程名，以及「将升级为当前格式 / 原文件不被修改，仅在保存时写入新格式」。`openProject`
+新增可选 `confirmMigration` 回调，工作区「打开工程」与菜单栏「打开工程」两处调用点传入。
+非破坏性：源文件不动，迁移在内存中完成，只有用户保存时才写出新格式。
+
+> 说明：检测与向导 UI 已就位，`openProject` 现在会先 probe 再 deserialize；把
+> `unknown` 直接拒绝，避免把非工程压缩包当作损坏工程打开。
 
 ---
 
