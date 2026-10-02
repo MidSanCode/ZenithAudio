@@ -17,14 +17,14 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 | 迁移工具：旧 `.zap`/`.zaproj` 一键迁移向导 | 🟡 **格式检测 + 报告 + 打开前确认向导 UI** 完成 |
 | A/B 工程对比 | ✅ **双快照切换已落地** |
 | 性能：128 轨压力测试 | ⬜ 未做 |
-| 文档：用户手册/快捷键/架构/Rust 指南 | ⬜ 未做 |
+| 文档：用户手册/快捷键/架构/Rust 指南 | ✅ **四份均已落地**，含快捷键注册表与文档一致性测试 |
 
 **门禁**
 
 | 门禁 | 结果 |
 |---|---|
 | `flutter analyze` | ✅ **0 error**（105 项既有 info/warning） |
-| `flutter test` | ✅ **276 passed**（+7：`ab_compare_test`）；8 skipped（FFI 需 dylib）；唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+| `flutter test` | ✅ **284 passed**（本轮 +19：`project_migration_test` 8 + `ab_compare_test` 7 + `shortcuts_test` 8 + `docs_test` 4）；8 skipped（FFI 需 dylib）；唯一失败为 Windows 专属 `registry_quoting_test.dart` |
 | `cargo clippy --locked -- -D warnings` | ✅ exit 0 |
 | `cargo check --target wasm32-unknown-unknown` | ✅ exit 0 |
 | `ci.yml` 语法 | ✅ 经 Ruby YAML 解析器校验 |
@@ -70,6 +70,21 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 > 为什么拆成纯 `AbController` + 薄 notifier：`ProjectNotifier` 在 `dispose` 时会读
 > `audioEngineProvider`（旧 `AudioService`），测试容器里会失败；把可测逻辑与 Riverpod
 > 解耦后，切换语义可以被直接验证。
+
+### 2.5 文档
+
+| 文件 | 内容 |
+|---|---|
+| `docs/USER_MANUAL.md` | 用户手册：界面、打开/保存、卷帘音符工具、MIDI、混音器、A/B、卡顿降级、迁移 |
+| `docs/SHORTCUTS.md` | 快捷键表，标注「由 `lib/core/shortcuts.dart` 单一来源」 |
+| `docs/ARCHITECTURE.md` | 全局架构：Dart/Rust 分工、实时安全、目录职责、时间与寻址、契约、构建、验证 |
+| `docs/RUST_CORE.md` | Rust 开发指南：实时安全清单、FFI 规则、加导出/加效果的步骤、跨平台约束、门禁 |
+| `lib/core/shortcuts.dart` | **新增**：快捷键的**单一权威来源**（`kShortcuts` + `SingleActivator` + 平台化标签）。此前的快捷键只是翻译字符串，没有任何东西绑定它。 |
+| `test/shortcuts_test.dart` | 8 项：平台化渲染、id 唯一、无重复绑定、undo/redo 同键不同 shift、`includeRepeats=false`、**读取 `docs/SHORTCUTS.md` 逐一核对** |
+| `test/docs_test.dart` | 4 项：四份文档存在且含关键小节 |
+
+> 文档一致性之所以做成测试：文档最容易腐烂。现在「加了快捷键没写进表」或「删了某份
+> 文档」都会让 CI 变红，而不是悄悄漂移。
 
 ---
 
