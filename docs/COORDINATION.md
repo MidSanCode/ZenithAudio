@@ -238,4 +238,21 @@
 | **回滚方式** | `git revert` 对应提交。 |
 | **状态** | 🟢 已生效 |
 
+---
+
+### C-013 · ABI 新增 S1 引擎/传输导出面（minor +1）+ 注册 `src/engine|driver|transport|dsp|voice/**` 所有权
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S1 Rust 实时音频核心） |
+| **变更（自有目录，仅备查）** | 新增 `native/zenith_core/src/engine/**`（`mod` / `graph` / `node` / `render_context` / `realtime`）、`src/driver/**`（`mod` / `offline_driver`，以及 `cpal_driver` 的 feature 门控骨架）、`src/transport/**`（`mod` / `transport` / `sequencer` / `event_queue`）、`src/dsp/**`（`mod` / `biquad` / `svf` / `fft` / `resampler`）、`src/voice/**`（`mod` / `voice_allocator` / `synth_voice` / `sampler`）。这些目录按本文档开头「非共享」定义本属 Agent-A。**不改动** `src/automation/**`（Agent-C）、`src/mixer/**`（Agent-D）、`src/effects/**`（Agent-C）。 |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/engine_api.rs`（`zenith_engine_*` / `zenith_transport_*` / `zenith_sizeof_engine*`）；② `src/ffi/mod.rs` **追加一行** `pub mod engine_api;`（不改动 `param_api` / `mixer_api` / `effect_api` / `types` 既有行）；③ `src/ffi/types.rs` **文件末尾追加** `// ── S1 engine & transport ──` 段（`ZenithMusicalTime` / `ZenithEngineConfig` / `ZenithEngineStatus` + 尺寸常量与转换），S0/S2/S3/S5 段**一字未改**；④ `src/lib.rs` 增加 `pub mod engine; pub mod driver; pub mod transport; pub mod dsp; pub mod voice;`，并把 `ABI_VERSION` 由 `0.4.0` 升至 **`0.5.0`**。 |
+| **ABI 依据** | 遵循 C-011 末尾交代：「后续阶段再追加导出请用 0.5.0」。与 S2/S3/S5 同一依据（`docs/ABI.md` §2.2）：**纯新增**导出函数与**纯追加**结构体，无既有签名/字段序/枚举判别值改动，属向后兼容的 minor 递增。 |
+| **新增导出函数** | `zenith_engine_create` / `zenith_engine_destroy` / `zenith_engine_start` / `zenith_engine_stop` / `zenith_engine_prepare` / `zenith_transport_play` / `zenith_transport_pause` / `zenith_transport_stop` / `zenith_transport_seek` / `zenith_transport_set_loop` / `zenith_transport_set_tempo` / `zenith_transport_set_time_signature` / `zenith_engine_status` / `zenith_sizeof_engine_config` / `zenith_sizeof_engine_status` / `zenith_sizeof_musical_time`。 |
+| **实现范围声明** | 本轮落地 **`ZenithEngine` 句柄、`Transport`、tick 级 `Sequencer`、无锁 `EventQueue`、`engine/graph`（DSP 图 + 拓扑 + 环检测）、`driver::OfflineDriver`（确定性块推进，用于测试与离线）**，并接线 S2/S3/S5（块边界各调用一次 `automation::advance_block`、`mixer` 顺序处理、`effect_chain::processing()` 顺序调用效果）。**真实设备驱动（`cpal`）本轮不启用**：`cpal` 需外部 crate 依赖，本机处于离线环境且用户明确要求不得安装软件包 / 不得污染系统环境；`driver/cpal_driver.rs` 仅提供 `cfg(feature = "cpal")` 门控骨架，默认构建走 `OfflineDriver`，`zenith_engine_start` 在无设备驱动时以 `Status::Unsupported` 明确上报而非假装成功。SIMD 热路径与 128 轨压力测试属 S9。 |
+| **影响面** | Agent-C/Agent-D：本轮在 `ffi/types.rs` 与 `ffi/mod.rs` 的改动均为**纯追加**，未触碰你们的段落；`ABI_VERSION` 已升至 `0.5.0`，后续追加请用 `0.6.0`。Dart 侧 `lib/native/zenith_core.dart` 的 `kExpectedAbiVersion` 需同步为 `0x000500`。 |
+| **回滚方式** | `git revert` 对应提交。S1 代码全部位于 `src/engine/**`、`src/driver/**`、`src/transport/**`、`src/dsp/**`、`src/voice/**`、`src/ffi/engine_api.rs`；`types.rs` / `mod.rs` / `lib.rs` 的改动是**纯追加**，可单独回退 S1 段而不影响 S2/S3/S5。 |
+| **状态** | 🟢 已生效（`cargo test` / `clippy` / `wasm32 check` 结论见 `docs/stages/s1.1-report.md`） |
+
 

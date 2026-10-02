@@ -5,15 +5,21 @@
 > 属于 `docs/PLAN_DAW_PARITY.md` §4.2 第 1、2 条所称的「接口契约」，
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
 > **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 补 S0 实际落地状态；
-> v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面
+> v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面；v1.3 补 S1 引擎/传输落地
 >
-> **当前实现状态（S0、S2、S3、S5 已完成，2026-10-05 更新）**：
+> **当前实现状态（S0、S1、S2、S3、S5 已完成，2026-10-06 更新）**：
 > `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
 > `lib/mixer/`、`lib/plugins/` **均已存在**并进入版本控制。
 >
 > - **S0**：版本三件套 `zenith_version()` / `zenith_version_match(u32)` /
 >   `zenith_version_string()`，端到端已验证 `flutter build windows --debug`
 >   会链接 Rust 静态库并把 `zenith_core.dll` 落在 exe 同级目录。
+> - **S1**：实时引擎与传输，`native/zenith_core/src/ffi/engine_api.rs` 导出
+>   `zenith_engine_*` / `zenith_transport_*`；核心实现在
+>   `src/{engine,driver,transport,dsp,voice}/`。**真实设备驱动（`cpal`）为可选
+>   feature，默认构建不含**——默认走 `driver::OfflineDriver`，`zenith_engine_start`
+>   在无设备驱动时返回 `ZENITH_ERR_UNSUPPORTED` 而非假装成功（见 §5.2 的
+>   `driver_kind` 说明）。
 > - **S2**：参数与自动化，`native/zenith_core/src/ffi/param_api.rs` 导出
 >   **52 个 `zenith_automation_*` 函数**（含 §6.4 列出的 6 个 `zenith_sizeof_*`、
 >   2 个平滑边界查询与 1 个 flag 掩码查询）。核心实现在
@@ -27,14 +33,14 @@
 >
 > `ABI_VERSION` 的 minor 计数是**所有 agent 共享的单一线性序列**，不是每阶段
 > 一个号：S2 占用 `0.2.0`（0x000200），S3 占用 `0.3.0`（0x000300），
-> S5 占用 `0.4.0`（0x000400），故当前值为 **0.4.0**。每次提升均为 **minor**：
-> 仅**新增**导出函数与结构体，未改动任何既有签名、字段顺序或枚举判别值，
-> 符合 §2.2 的向后兼容规则。提案登记于 `docs/COORDINATION.md`
-> C-002（S2）、C-004（S3）与 C-011（S5）。
+> S5 占用 `0.4.0`（0x000400），S1 占用 `0.5.0`（0x000500），故当前值为 **0.5.0**。
+> 每次提升均为 **minor**：仅**新增**导出函数与结构体，未改动任何既有签名、
+> 字段顺序或枚举判别值，符合 §2.2 的向后兼容规则。提案登记于
+> `docs/COORDINATION.md` C-002（S2）、C-004（S3）、C-011（S5）与 C-013（S1）。
 >
-> 因此：本文件中标注 **[S0 落地]** / **[S2 落地]** / **[S5 落地]** 的条目是
-> **已实现事实**；其余（`[S1]`/`[S4]`/`[S6]`/`[S7]`）仍是目标契约。DSP 图、
-> sequencer、离线渲染与插件宿主的 ABI 待后续阶段落地，落地时必须同步更新本文件。
+> 因此：本文件中标注 **[S0 落地]** / **[S1 落地]** / **[S2 落地]** / **[S5 落地]**
+> 的条目是**已实现事实**；其余（`[S4]`/`[S6]`/`[S7]`）仍是目标契约。离线渲染与
+> 插件宿主的 ABI 待后续阶段落地，落地时必须同步更新本文件。
 >
 > ⚠️ **本文件描述的是我们自己的 ABI。禁止在本仓库引入任何第三方 DAW 品牌名（§0.2）。**
 
@@ -275,6 +281,12 @@ typedef enum ZenithDriverKind {
 
 > **驱动抽象是 Web 的关键**（PLAN §3.S1）：`AudioDriver` trait 让「谁的时钟在推进 DSP 图」
 > 成为可注入依赖。桌面是 `cpal` 推，Web 是 `AudioWorkletProcessor` 拉。
+>
+> **S1 落地状态**：`AudioDriver` trait、`OfflineDriver` 与 `zenith_engine_render`
+> 已落地；`CpalDriver` 提供 `cfg(feature = "cpal")` 门控骨架，默认构建不启用
+> （`cpal` 为可选外部依赖）。默认构建下 `zenith_engine_start` 返回
+> `ZENITH_ERR_UNSUPPORTED`，由 Dart 侧决定是否走离线路径；`zenith_engine_render`
+> 是驱动无关的拉取入口，供测试与后续 Worklet / 离线驱动使用。
 
 **`flags` 位定义**（一经发布不可复用位）：
 
@@ -312,7 +324,7 @@ size_t      zenith_sizeof_engine_config(void);
 size_t      zenith_sizeof_engine(void);      /* 不透明，仅调试用，可为 0 */
 ```
 
-### 6.2 引擎与传输（**[S1]**）
+### 6.2 引擎与传输（**[S1 落地]**）
 
 ```c
 ZenithStatusCode zenith_engine_create(const ZenithEngineConfig*, ZenithEngine**);
@@ -333,7 +345,7 @@ ZenithStatusCode zenith_transport_set_time_signature(ZenithEngine*, uint32_t num
                                                      uint32_t den);
 ```
 
-### 6.3 状态快照（**[S1]**，无锁读取）
+### 6.3 状态快照（**[S1 落地]**，无锁读取）
 
 ```c
 typedef struct ZenithEngineStatus {
@@ -805,9 +817,9 @@ cargo test
 
 | Rust（`src/ffi/types.rs`） | Dart（`lib/engine/ffi/native_types.dart`） | 状态 |
 |---|---|---|
-| `ZenithEngineConfig` | `ZenithEngineConfig` | **[S0 落地]** |
-| `ZenithEngineStatus` | `ZenithEngineStatus` | [S1] |
-| `ZenithMusicalTime` | `ZenithMusicalTime` | **[S0 落地]**（tick 化基座） |
+| `ZenithEngineConfig` | `ZenithEngineConfig` | **[S0 落地]** / **[S1 落地]**（32 字节） |
+| `ZenithEngineStatus` | `ZenithEngineStatus` | **[S1 落地]**（56 字节） |
+| `ZenithMusicalTime` | `ZenithMusicalTime` | **[S0 落地]** / **[S1 落地]**（tick 化基座，16 字节） |
 | `ZenithParamId` | `ZenithParamId` | **[S2 落地]**（8 字节） |
 | `ZenithParamDescriptor` | `ZenithParamDescriptor` | **[S2 落地]**（48 字节 / 64 位） |
 | `ZenithAutomationPoint` | `ZenithAutomationPoint` | **[S2 落地]**（24 字节） |
@@ -867,6 +879,7 @@ cargo test
 | v1.0.1 | — | 补充 S0 实际落地状态（仅版本三件套已实现） | S0 |
 | v1.1 | 2026-10-04 | S2 参数与自动化落地：新增 52 个 `zenith_automation_*` 函数与独立句柄 `ZenithAutomation`（占用 minor `0.2.0`）；§6.4 重写为实际契约；§9.3 补 5 个 S2 结构体与尺寸对照表；删除已解决的 `panic = "abort"` 不一致告警。**注**：minor 计数为全 agent 共享的单一线程序列，S3 随后占用 `0.3.0`，故 `ABI_VERSION` 当前为后者 | Agent-C（S2） |
 | v1.2 | 2026-10-05 | S5 内置效果器查询面落地：新增 §6.5b 与 `zenith_effect_*` 系列共 15 个导出函数、`ZenithEffectDescriptor` 结构体、`zenith_effect_category` / `zenith_effect_kind_range` 常量镜像（占用 minor `0.4.0`，`ABI_VERSION` 当前为 `0.4.0`）；**偿还 §6.4 记录的 `zenith_effect_describe_params` 欠账**（拆为「静态侧问个数 + 实例侧取描述符」两条路径，理由是描述符内含取决于槽位的自动化地址）；§3.1 补 `ParameterUnit::Milliseconds`（纯追加判别值 7）；更正顶部过时的「S5 未落地」状态说明。**不涉及**任何效果 DSP 的跨语言调用——效果只经查询面暴露，UI 由描述符生成 | Agent-C（S5） |
+| v1.3 | 2026-10-06 | S1 实时引擎与传输落地：新增 `zenith_engine_create/destroy/start/stop/prepare`、`zenith_transport_play/pause/stop/seek/set_loop/set_tempo/set_time_signature`、`zenith_engine_render`、`zenith_engine_status`、`zenith_engine_driver_supported` 与 3 个 `zenith_sizeof_*`（占用 minor `0.5.0`，`ABI_VERSION` 当前为 `0.5.0`）；`ZenithMusicalTime` / `ZenithEngineConfig` / `ZenithEngineStatus` 三个结构体由「目标契约」转 **[S1 落地]**，尺寸在 §9.3 标注。§6.2/§6.3 由 `[S1]` 改为 **[S1 落地]**，并说明 `cpal` 为可选 feature、默认构建 `start` 返回 `UNSUPPORTED`。仅**新增**导出与**追加**结构体，无既有签名/字段序/判别值改动 | Agent-A（S1） |
 
 ---
 

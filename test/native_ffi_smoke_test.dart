@@ -1,4 +1,9 @@
+import 'dart:ffi';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zenith_audio/engine/ffi/engine_bindings.dart';
+import 'package:zenith_audio/engine/ffi/engine_types.dart';
 import 'package:zenith_audio/native/zenith_core.dart';
 
 /// S0: the FFI link probe.
@@ -79,6 +84,51 @@ void main() {
       final stamp = ZenithCore.expectedAbiVersion;
       final expected = '${stamp >> 16}.${(stamp >> 8) & 0xFF}.${stamp & 0xFF}';
       expect(ZenithCore.versionString(), expected);
+    });
+
+    test('[S1] the engine struct mirrors match the core', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final sizes = EngineStructSizes.read();
+      expect(sizes, isNotNull, reason: 'the S1 sizeof helpers must resolve');
+      // Dart's idea of each layout against the core's, so a field reorder or a
+      // width change surfaces as a loud failure rather than silent misreads.
+      expect(sizes!.engineConfig, sizeOf<ZenithEngineConfig>());
+      expect(sizes.engineStatus, sizeOf<ZenithEngineStatus>());
+      expect(sizes.musicalTime, sizeOf<ZenithMusicalTime>());
+    });
+
+    test('[S1] an engine can be created, driven and destroyed', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final engine = ZenithEngineHandle.create(sampleRate: 48000, blockSize: 256);
+      expect(engine, isNotNull);
+      addTearDown(engine!.dispose);
+
+      expect(engine.play(), isTrue);
+      // One beat at 120 BPM is 960 ticks = 24000 frames at 48 kHz.
+      expect(engine.seekTicks(960), isTrue);
+      final status = engine.readStatus();
+      expect(status.playheadFrames, 24000);
+      expect(status.sampleRate, 48000);
+      expect(status.isPlaying, isTrue);
+
+      final out = Float32List.fromList(List<double>.filled(256 * 2, 0));
+      expect(engine.render(out, 256), isTrue);
+    });
+
+    test('[S1] the offline driver is reported as supported', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+      expect(engineDriverSupported(ZenithDriverKind.offline), isTrue);
     });
   });
 }
