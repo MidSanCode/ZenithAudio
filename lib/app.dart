@@ -8,6 +8,7 @@ import 'core/theme/app_theme.dart';
 import 'core/utils/logger.dart';
 import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
+import 'engine/degradation_monitor.dart';
 import 'screens/editor_screen.dart';
 import 'screens/workspace_screen.dart';
 import 'services/project_serializer.dart';
@@ -39,6 +40,13 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
     if (path != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _openProjectPath(path));
     }
+    // Start the degradation monitor. Its health source defaults to a healthy
+    // stub, so this is inert until an engine is wired in; starting it here makes
+    // that wiring a provider override rather than lifecycle plumbing in every
+    // screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(degradationMonitorProvider).start();
+    });
   }
 
   /// Opens a project handed over by a later launch.
@@ -80,6 +88,9 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
   void dispose() {
     windowManager.removeListener(this);
     SingleInstance.release();
+    // The provider also stops it; stopping here is belt-and-braces so the timer
+    // does not outlive the widget.
+    ref.read(degradationMonitorProvider).stop();
     super.dispose();
   }
 
