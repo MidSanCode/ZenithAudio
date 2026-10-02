@@ -16,7 +16,7 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 | 实时时间拉伸 / 变调（独立于宿主速度） | ✅ `edit/time_stretch.rs`：WSOLA 拉伸；变调 = 重采样 + 拉伸 |
 | 音频切片 → 映射到音符（瞬态检测） | 🟡 `edit/transient.rs`：瞬态检测 + `slice_at`；**映射到音符的 UI/模型接线**待做 |
 | 交叉淡化 | ✅ `edit/crossfade.rs`：线性 / 等功率曲线 |
-| 非破坏性片段编辑 | ⬜ 属 Dart 模型/UI 层，见 §4 |
+| 非破坏性片段编辑 | ✅ `models/audio_clip_ref.dart`：引用源 + 偏移 + 增益包络 + 淡入淡出，`trim` 只改参数不碰源 |
 | 音频量化 / 瞬态对齐网格 | 🟡 瞬态检测就位；对齐网格的接线待做 |
 | 波形编辑器（P2） | ⬜ 未做 |
 
@@ -61,6 +61,22 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 3. **瞬态→卷帘音符映射**：`slice_at` 产出的是音频片段；把它映射成卷帘音符并保留每片独立播放是模型层工作，未做。
 4. **相位声码器**：WSOLA 已满足「±50% 无明显金属音」的验证目标；若实测不达标，相位声码器是升级路径（模块文档已注明）。
 5. **Web 端降级**：拉伸属 S1.5 的重型渲染，L1 降级时应不可用；该联动待 S1.5/UI 接线。
+
+### 4.1 本轮增补：非破坏性片段模型
+
+`lib/models/audio_clip_ref.dart`：`AudioClipRef`（引用源 `Float32List` + `sourceOffsetSamples`
++ `lengthSamples` + 淡入/淡出 + 增益 + 增益包络 `GainPoint`）与 `crossfadeClips`。核心性质：
+
+- **`trim` 不碰源**：只移动 `sourceOffsetSamples`/`lengthSamples`，源缓冲共享（测试断言
+  `identical(trimmed.source, source)`）；
+- **淡入/淡出长度钳制到片段一半**，`isWellFormed` 可断言；拖到一半就停，不报错；
+- **包络乱序自动归一化**（拷贝排序），求值循环无需自防；
+- **非有限样本写为静音**（`NaN`/`Inf` 在输出里归零）；
+- `render()` 从不修改源。
+
+`test/audio_clip_ref_test.dart` **17 项**。
+
+门禁：`flutter analyze` 0 error、全仓 `flutter test` **332 passed**（+17）。
 
 ---
 
