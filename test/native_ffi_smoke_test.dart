@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zenith_audio/engine/ffi/edit_bindings.dart';
 import 'package:zenith_audio/engine/ffi/engine_bindings.dart';
 import 'package:zenith_audio/engine/ffi/engine_types.dart';
 import 'package:zenith_audio/native/zenith_core.dart';
@@ -155,6 +156,36 @@ void main() {
       expect(header.dataBytes, 24000 * 2 * 2);
 
       expect(engine.pdcLatency(), 0, reason: 'no effects => no PDC delay');
+    });
+
+    test('[S8] audio-edit bindings run through the FFI', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final input = Float32List.fromList(
+        List<double>.generate(4000, (i) => (i % 100 < 50) ? 0.5 : -0.5),
+      );
+
+      final stretched = AudioEditBindings.timeStretch(input, 2.0);
+      expect(stretched, isNotNull);
+      expect((stretched!.length - 8000).abs() <= 1, isTrue);
+
+      final shifted = AudioEditBindings.pitchShift(input, 12.0);
+      expect(shifted, isNotNull);
+      expect((shifted!.length / input.length - 1.0).abs() < 0.05, isTrue);
+
+      final transients = AudioEditBindings.detectTransients(input);
+      expect(transients, isA<List<int>>());
+
+      final cross = AudioEditBindings.crossfade(
+        Float32List.fromList(List.filled(100, 1.0)),
+        Float32List.fromList(List.filled(80, 2.0)),
+        fade: 40,
+      );
+      expect(cross, isNotNull);
+      expect(cross!.length, 140);
     });
   });
 }

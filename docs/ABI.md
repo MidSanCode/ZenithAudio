@@ -6,7 +6,7 @@
 > 任何 agent 变更 ABI 必须同步改本文件，并按 §4.2 第 1 条先登记 `docs/COORDINATION.md`。
 > **文档版本**：v1.0（对应 S0 契约冻结）；v1.0.1 补 S0 实际落地状态；
 > v1.1 补 S2 参数与自动化落地状态；v1.2 补 S5 效果器查询面；v1.3 补 S1 引擎/传输落地；
-> v1.4 补 S4 离线渲染与 PDC 落地
+> v1.4 补 S4 离线渲染与 PDC 落地；v1.5 补 S8 音频编辑算法导出面
 >
 > **当前实现状态（S0、S1、S2、S3、S5 已完成，2026-10-06 更新）**：
 > `native/zenith_core/`、`hook/build.dart`、`lib/engine/`、`lib/automation/`、
@@ -893,6 +893,7 @@ cargo test
 | v1.2 | 2026-10-05 | S5 内置效果器查询面落地：新增 §6.5b 与 `zenith_effect_*` 系列共 15 个导出函数、`ZenithEffectDescriptor` 结构体、`zenith_effect_category` / `zenith_effect_kind_range` 常量镜像（占用 minor `0.4.0`，`ABI_VERSION` 当前为 `0.4.0`）；**偿还 §6.4 记录的 `zenith_effect_describe_params` 欠账**（拆为「静态侧问个数 + 实例侧取描述符」两条路径，理由是描述符内含取决于槽位的自动化地址）；§3.1 补 `ParameterUnit::Milliseconds`（纯追加判别值 7）；更正顶部过时的「S5 未落地」状态说明。**不涉及**任何效果 DSP 的跨语言调用——效果只经查询面暴露，UI 由描述符生成 | Agent-C（S5） |
 | v1.3 | 2026-10-06 | S1 实时引擎与传输落地：新增 `zenith_engine_create/destroy/start/stop/prepare`、`zenith_transport_play/pause/stop/seek/set_loop/set_tempo/set_time_signature`、`zenith_engine_render`、`zenith_engine_status`、`zenith_engine_driver_supported` 与 3 个 `zenith_sizeof_*`（占用 minor `0.5.0`，`ABI_VERSION` 当前为 `0.5.0`）；`ZenithMusicalTime` / `ZenithEngineConfig` / `ZenithEngineStatus` 三个结构体由「目标契约」转 **[S1 落地]**，尺寸在 §9.3 标注。§6.2/§6.3 由 `[S1]` 改为 **[S1 落地]**，并说明 `cpal` 为可选 feature、默认构建 `start` 返回 `UNSUPPORTED`。仅**新增**导出与**追加**结构体，无既有签名/字段序/判别值改动 | Agent-A（S1） |
 | v1.4 | 2026-10-06 | S4 离线渲染与 PDC 落地：`zenith_render_offline` / `zenith_buffer_free` 由目标契约转 **[S4 落地]**（`src/ffi/render_api.rs`），新增 `zenith_engine_pdc_latency`；`ABI_VERSION` 由 `0.5.0` 升至 **`0.6.0`**（占用 minor `0.6.0`）。§6.8 标注 **[S4 落地]** 并说明 `target_sample_rate` 不静默重采样、缓冲由 Rust 分配需配套释放。离线渲染复用同一 `render_block`，PDC 做通道间相对对齐。仅**新增**导出，无既有改动 | Agent-A（S4） |
+| v1.5 | 2026-10-06 | S8 音频编辑算法导出面落地：新增 `zenith_time_stretch` / `zenith_pitch_shift` / `zenith_detect_transients` / `zenith_crossfade` / `zenith_edit_buffer_free`（`src/ffi/edit_api.rs`），`ABI_VERSION` 由 `0.6.0` 升至 **`0.7.0`**（占用 minor `0.7.0`）。内存约定同 §6.8：输入调用方提供只读，输出 Rust 分配、`zenith_buffer_free` 释放。**非实时安全**，仅控制/工作线程调用。仅**新增**导出 | Agent-A（S8） |
 
 ---
 

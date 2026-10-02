@@ -20,6 +20,7 @@
 //! `docs/COORDINATION.md`; the S1 engine surface was registered as C-013.
 
 pub mod effect_api;
+pub mod edit_api;
 pub mod engine_api;
 pub mod mixer_api;
 pub mod param_api;

@@ -296,4 +296,21 @@
 | **回滚方式** | `git revert`；删除 `src/edit/**` 与 `lib.rs` 一行即可。 |
 | **状态** | 🟢 已生效 |
 
+---
+
+### C-016 · ABI 新增 S8 音频编辑导出面（minor +1）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S8） |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/edit_api.rs`（`zenith_time_stretch` / `zenith_pitch_shift` / `zenith_detect_transients` / `zenith_crossfade` 及其配套 `zenith_buffer_free` 复用）；② `src/ffi/mod.rs` **追加一行** `pub mod edit_api;`；③ `src/lib.rs` `ABI_VERSION` 由 `0.6.0` 升至 **`0.7.0`**。 |
+| **ABI 依据** | `docs/ABI.md` §2.2 纯新增导出，无既有签名/字段序改动。 |
+| **新增导出函数** | `zenith_time_stretch(in_ptr, in_len, factor, out_ptr, out_len, out_count)`、`zenith_pitch_shift(...)`、`zenith_detect_transients(in_ptr, in_len, out_ptr, out_capacity, out_count)`、`zenith_crossfade(a_ptr, a_len, b_ptr, b_len, fade, curve, out_ptr, out_len, out_count)`。 |
+| **内存约定** | 与 §6.8 的离线渲染一致：输入由调用方提供（Rust 只读、不持有），输出由 **Rust 分配**并返回 `*mut f32`，调用方必须以相同长度调 `zenith_buffer_free`。瞬态检测输出为 `u32` 索引数组，同样 Rust 分配、`zenith_buffer_free` 释放（按元素计）。 |
+| **实时安全** | **非**实时安全：均为离线批处理、会分配。仅在控制/工作线程调用。 |
+| **影响面** | Dart `kExpectedAbiVersion` 同步为 `0x000700`。 |
+| **回滚方式** | `git revert`；`edit_api.rs` 为纯新增，`mod.rs` / `lib.rs` 为纯追加，可单独回退不影响 S1/S2/S3/S4/S5。 |
+| **状态** | 🟢 已生效 |
+
 

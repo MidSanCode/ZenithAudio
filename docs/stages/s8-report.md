@@ -1,9 +1,9 @@
 # S8 — 音频编辑算法（Agent-A，算法层）
 
-**状态**：Rust 算法层完成，四门禁全绿
+**状态**：Rust 算法层 + FFI 导出 + Dart 绑定完成，四门禁全绿
 **日期**：2026-10-06
 **计划依据**：`docs/PLAN_DAW_PARITY.md` §3 S8
-**登记**：`docs/COORDINATION.md` C-015
+**登记**：`docs/COORDINATION.md` C-015（算法层）、C-016（FFI 导出）
 
 ---
 
@@ -24,10 +24,11 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 
 | 门禁 | 结果 |
 |---|---|
-| `cargo test -p zenith_core` | ✅ **1012 passed / 0 failed**（+24） |
+| `cargo test -p zenith_core` | ✅ **1018 passed / 0 failed**（+6 FFI 导出测试，累计 +30） |
 | `cargo clippy --all-targets -- -D warnings` | ✅ **exit 0** |
 | `cargo check --target wasm32-unknown-unknown` | ✅ **exit 0** |
-| `flutter analyze` / `flutter test` | 未触及 Dart 侧（本轮纯算法层），仍为上轮 0 error / 243 passed |
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test` | ✅ **288 passed**（+1 FFI 冒烟 `[S8]`；构建 dylib 后 FFI 冒烟 **10 passed**） |
 
 ---
 
@@ -39,9 +40,11 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 | `src/edit/time_stretch.rs` | `time_stretch` / `time_stretch_with`（WSOLA：汉宁窗 50% 重叠 + 相关性对齐搜索，`StretchConfig` 可配）、`resample_linear`、`pitch_shift`。 |
 | `src/edit/transient.rs` | `detect_transients` / `detect_transients_with`（帧能量 vs **局部中位数**，阈值 dB 可配、min-gap 防重复）、`slice_at`。 |
 | `src/edit/crossfade.rs` | `FadeCurve`（Linear / EqualPower）、`equal_power_curves`、`crossfade`。 |
-| `src/lib.rs` | `pub mod edit;`（C-015 登记）。 |
+| `src/ffi/edit_api.rs` | `zenith_time_stretch` / `zenith_pitch_shift` / `zenith_detect_transients` / `zenith_crossfade` / `zenith_edit_buffer_free`。 |
+| `lib/engine/ffi/edit_bindings.dart` | `AudioEditBindings`：复制到 `Float32List` 后立即释放原生缓冲，调用方不见裸指针。 |
+| `src/lib.rs` | `pub mod edit;`（C-015）；`ABI_VERSION` → `0.7.0`（C-016）。 |
 
-共 **24 项**单元测试。无 ABI 变更（`ABI_VERSION` 仍 `0.6.0`），因为该模块目前只暴露 crate 内 API；FFI 包装属后续。
+共 **30 项**新增 Rust 测试（24 算法 + 6 FFI）。`ABI_VERSION` 由 `0.6.0` 升至 **`0.7.0`**（C-016）。
 
 ---
 
@@ -54,8 +57,7 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 
 ## 4. 已知缺口 / 后续
 
-1. **FFI + Dart 绑定**：`edit/**` 目前无 C ABI 导出。若要 Dart 直接调用需新增 `ffi/edit_api.rs` 并升 `ABI_VERSION`（下一个 minor）；本轮**刻意未做**，因为 S8 的 UI/模型接线尚未开始，先冻结 API 形状为时过早。
-2. **非破坏性片段编辑 / 波形编辑器**：属 Dart 模型与 UI 层（`audio_clip.dart` / `audio_clip_editor.dart`），未做。
+1. **非破坏性片段编辑 / 波形编辑器**：属 Dart 模型与 UI 层（`audio_clip.dart` / `audio_clip_editor.dart`），未做。FFI 导出与 Dart 绑定**已完成**，UI 可直接调用。
 3. **瞬态→卷帘音符映射**：`slice_at` 产出的是音频片段；把它映射成卷帘音符并保留每片独立播放是模型层工作，未做。
 4. **相位声码器**：WSOLA 已满足「±50% 无明显金属音」的验证目标；若实测不达标，相位声码器是升级路径（模块文档已注明）。
 5. **Web 端降级**：拉伸属 S1.5 的重型渲染，L1 降级时应不可用；该联动待 S1.5/UI 接线。
@@ -64,4 +66,4 @@ PLAN §3.S8 明说拉伸/切片算法「是独立的纯函数（Float32 数组�
 
 ## 5. 回滚方式
 
-删除 `src/edit/**` 与 `src/lib.rs` 中 `pub mod edit;` 一行即可；不涉及 ABI、不影响其他目录。
+删除 `src/edit/**`、`src/ffi/edit_api.rs`、`lib/engine/ffi/edit_bindings.dart`，并还原 `src/lib.rs`（去掉 `pub mod edit;` 与版本号）、`src/ffi/mod.rs` 一行即可。`ABI_VERSION` 一并回退到 `0.6.0`。
