@@ -12,6 +12,7 @@ import '../../providers/settings_provider.dart';
 import '../../providers/floating_window_provider.dart';
 import '../toolbar/menu_bar.dart';
 import '../toolbar/tool_bar.dart';
+import 'ab_compare_bar.dart';
 import '../layout/floating_window.dart';
 import '../mixer/mixer_panel.dart';
 import '../browser/browser_panel.dart';
@@ -275,6 +276,7 @@ class _AudioEditorState extends ConsumerState<AudioEditor> {
               children: [
                 if (screenSize != ScreenSize.mobile) const AudioMenuBar(),
                 const AudioToolBar(),
+                const AbCompareBar(),
                 Expanded(
                   child: Listener(
                     onPointerSignal: _onPointerSignal,

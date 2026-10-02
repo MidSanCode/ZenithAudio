@@ -15,7 +15,7 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 | 移除旧依赖 `media_kit` | ⬜ 未做（需确认无引用；引擎未接线，贸然移除会静音） |
 | 构建固化：hook 在六平台 CI 稳定产出原生库 | 🟡 **新增 CI 守卫**：Rust clippy/test/wasm32、Dart analyze/test、六平台 `rustup target add` 由 `dtolnay/rust-toolchain` 承担 |
 | 迁移工具：旧 `.zap`/`.zaproj` 一键迁移向导 | 🟡 **格式检测 + 报告 + 打开前确认向导 UI** 完成 |
-| A/B 工程对比 | ⬜ 未做 |
+| A/B 工程对比 | ✅ **双快照切换已落地** |
 | 性能：128 轨压力测试 | ⬜ 未做 |
 | 文档：用户手册/快捷键/架构/Rust 指南 | ⬜ 未做 |
 
@@ -24,7 +24,7 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 | 门禁 | 结果 |
 |---|---|
 | `flutter analyze` | ✅ **0 error**（105 项既有 info/warning） |
-| `flutter test` | ✅ **269 passed**（+8：`project_migration_test`）；8 skipped（FFI 需 dylib）；唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+| `flutter test` | ✅ **276 passed**（+7：`ab_compare_test`）；8 skipped（FFI 需 dylib）；唯一失败为 Windows 专属 `registry_quoting_test.dart` |
 | `cargo clippy --locked -- -D warnings` | ✅ exit 0 |
 | `cargo check --target wasm32-unknown-unknown` | ✅ exit 0 |
 | `ci.yml` 语法 | ✅ 经 Ruby YAML 解析器校验 |
@@ -62,6 +62,14 @@ S9 有 6 项：A/B 对比、性能压测、文档、迁移工具、移除 media_
 
 > 说明：检测与向导 UI 已就位，`openProject` 现在会先 probe 再 deserialize；把
 > `unknown` 直接拒绝，避免把非工程压缩包当作损坏工程打开。
+
+### 2.4 A/B 对比
+
+`lib/providers/ab_compare_provider.dart`：`AbController`（**纯逻辑**，read/write 注入，`arm`/`capture`/`switchTo`/`toggle`/`copyLiveToOther`/`disarm`）+ 薄 `AbNotifier`。`Project` 不可变，故快照是引用、切换是一次状态赋值，足够快作为听感工具。`lib/widgets/editor/ab_compare_bar.dart` 在编辑器内显示 A/B 切换（`Shift+Tab`）、复制到另一侧、退出；View 菜单加「A/B 对比」。**7 项纯逻辑测试**。
+
+> 为什么拆成纯 `AbController` + 薄 notifier：`ProjectNotifier` 在 `dispose` 时会读
+> `audioEngineProvider`（旧 `AudioService`），测试容器里会失败；把可测逻辑与 Riverpod
+> 解耦后，切换语义可以被直接验证。
 
 ---
 

@@ -6,6 +6,7 @@ import '../../core/utils/theme_colors.dart';
 import '../../core/instrument_picker.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
+import '../../providers/ab_compare_provider.dart';
 import '../editor/synth_editor_dialog.dart' show SynthEditorLauncher;
 import '../../services/file_service.dart';
 import '../../services/midi/smf_types.dart';
@@ -250,6 +251,12 @@ class AudioMenuBar extends ConsumerWidget {
                 },
               ),
               MenuItem(label: 'menu.view.fitWindow'.tr()),
+              const MenuItem.separator(),
+              MenuItem(
+                label: 'menu.view.abCompare'.tr(),
+                shortcut: 'Shift+Tab',
+                onTap: () => ref.read(abCompareProvider.notifier).arm(),
+              ),
             ],
           ),
           _MenuButton(

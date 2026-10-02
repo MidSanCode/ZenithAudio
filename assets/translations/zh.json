@@ -40,6 +40,7 @@
   "menu.view.zoomIn": "放大",
   "menu.view.zoomOut": "缩小",
   "menu.view.fitWindow": "适应窗口",
+  "menu.view.abCompare": "A/B 对比",
 
   "menu.help": "帮助",
   "menu.help.about": "关于 卓声",
@@ -225,6 +226,10 @@
   "migration.nonDestructive": "原始文件不会被修改；新格式仅在保存时写入。",
   "migration.upgradeOpen": "升级并打开",
   "migration.open": "打开",
+
+  "ab.label": "A/B",
+  "ab.copyToOther": "复制到另一侧",
+  "ab.exit": "退出 A/B",
 
   "common.ok": "确定",
 

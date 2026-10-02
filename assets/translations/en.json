@@ -39,6 +39,7 @@
   "menu.view.zoomIn": "Zoom In",
   "menu.view.zoomOut": "Zoom Out",
   "menu.view.fitWindow": "Fit Window",
+  "menu.view.abCompare": "A/B Compare",
 
   "menu.help": "Help",
   "menu.help.about": "About",
@@ -224,6 +225,10 @@
   "migration.nonDestructive": "The original file is not modified; the new format is written only when you save.",
   "migration.upgradeOpen": "Upgrade & open",
   "migration.open": "Open",
+
+  "ab.label": "A/B",
+  "ab.copyToOther": "Copy to other",
+  "ab.exit": "Exit A/B",
 
   "common.ok": "OK",
 
