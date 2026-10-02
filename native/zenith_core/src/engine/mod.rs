@@ -47,6 +47,9 @@ pub use graph::{DspGraph, GraphError};
 pub use node::DspNode;
 pub use render_context::RenderContext;
 
+pub mod effects_rack;
+pub use effects_rack::EffectRack;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI64, AtomicU32, Ordering};
@@ -276,6 +279,8 @@ pub struct Engine {
     automation: AutomationLayer,
     /// Post-mixer serial DSP chain.
     master_chain: DspGraph,
+    /// Live effect processors for the mixer's occupied slots.
+    effect_rack: EffectRack,
     /// Preallocated source bus fed by the voices, interleaved stereo.
     source: Vec<f32>,
     /// Preallocated master output, interleaved stereo.
@@ -316,9 +321,10 @@ impl Engine {
         let source_channel = crate::mixer::DEFAULT_RETURN_BUSES as u32 + 1;
         let master = crate::mixer::ChannelId::MASTER.get();
         let _ = mixer.connect(source_channel, master);
-        mixer.publish_audibility();
-        let mut master_chain = DspGraph::new();
+        mixer.publish_audibility();        let mut master_chain = DspGraph::new();
         master_chain.prepare(config.sample_rate as f32, max_block, 2);
+        let mut effect_rack = EffectRack::new();
+        effect_rack.prepare(config.sample_rate as f32, max_block);
         let snapshot = EngineSnapshot::new(&EngineStatus {
             max_voices: DEFAULT_MAX_VOICES as u32,
             sample_rate: config.sample_rate,
@@ -333,6 +339,7 @@ impl Engine {
             mixer,
             automation: AutomationLayer::new(config.sample_rate as f32),
             master_chain,
+            effect_rack,
             source: alloc::vec![0.0; max_block * 2],
             output: alloc::vec![0.0; max_block * 2],
             chain_planar: alloc::vec![0.0; max_block * 2],
@@ -426,6 +433,21 @@ impl Engine {
     /// The post-mixer master chain, mutably. Control thread only.
     pub fn master_chain_mut(&mut self) -> &mut DspGraph {
         &mut self.master_chain
+    }
+
+    /// The effect rack.
+    #[must_use]
+    pub const fn effect_rack(&self) -> &EffectRack {
+        &self.effect_rack
+    }
+
+    /// Rebuilds the live effect processors to match the mixer's slots.
+    ///
+    /// Call after any mixer edit that changes an effect slot's kind, and after
+    /// a project load. Control thread only: this instantiates effects and
+    /// allocates (ABI §7.3).
+    pub fn sync_effects(&mut self) {
+        self.effect_rack.sync(&self.mixer);
     }
 
     /// Records that a device driver has been attached.
@@ -569,31 +591,38 @@ impl Engine {
         }
     }
 
-    /// Applies each channel's phase/fader/pan, meters it, and sums it into its
-    /// destination, in topological order.
+    /// Applies each channel's phase/fader/pan, runs its effect rack, meters it,
+    /// and sums it into its destination, in topological order.
     ///
-    /// Effect processors are applied by the caller (S5 wiring); this method is
-    /// the console summing path, which is what the S1 acceptance ("internal
-    /// mixing bus, per-sample summing") requires.
-    ///
-    /// Real-time safe: the only copy is into the preallocated `sum_scratch`.
+    /// Real-time safe: `sum_scratch` and `order_scratch` are preallocated and
+    /// the effect rack allocates nothing on the process path.
     fn process_mixer(&mut self, frames: usize) {
-        // Copy the order into the preallocated scratch so the borrow of
-        // `self.mixer` ends before mutation and no allocation happens here.
-        //
-        // The scratch is sized to the mixer's channel capacity at creation;
-        // adding channels is a control-thread operation that must be followed by
-        // re-preparing the engine, so the capacity is stable on the audio path.
+        // Destructure so the mixer's buffers, the effect rack, the parameter
+        // store and the scratch buffers are borrowed as disjoint fields. A
+        // method call on `self` would borrow all of `self` and make this
+        // impossible without cloning.
+        let Engine {
+            mixer,
+            effect_rack,
+            automation,
+            sum_scratch,
+            order_scratch,
+            config,
+            ..
+        } = self;
+        let sample_rate = config.sample_rate;
+
+        // Copy the order into the preallocated scratch so the borrow of `mixer`
+        // ends before mutation and no allocation happens here.
         let count = {
-            let order = self.mixer.order();
-            let count = order.len().min(self.order_scratch.len());
-            self.order_scratch[..count].copy_from_slice(&order[..count]);
+            let order = mixer.order();
+            let count = order.len().min(order_scratch.len());
+            order_scratch[..count].copy_from_slice(&order[..count]);
             count
         };
-        for index in 0..count {
-            let id = self.order_scratch[index];
+        for &id in order_scratch[..count].iter() {
             let (level, pan, phase_invert, audible, output) = {
-                let Some(node) = self.mixer.node(id) else {
+                let Some(node) = mixer.node(id) else {
                     continue;
                 };
                 (
@@ -611,14 +640,18 @@ impl Engine {
             let gl = level * phase * pl;
             let gr = level * phase * pr;
 
-            if let Some(node) = self.mixer.node_mut(id) {
+            // Phase → fader → pan, then the effect rack, then metering. The
+            // order matches the strip design: effects see a levelled, panned
+            // stereo image (PLAN §3.S3 `strip.rs`).
+            if let Some(node) = mixer.node_mut(id) {
                 let cap = frames.min(node.buffer.len() / 2);
                 for i in 0..cap {
                     node.buffer[i * 2] *= gl;
                     node.buffer[i * 2 + 1] *= gr;
                 }
+                effect_rack.process(id, &mut node.buffer[..cap * 2], cap, &automation.store);
                 node.meter
-                    .accumulate(&node.buffer[..cap * 2], cap, self.config.sample_rate);
+                    .accumulate(&node.buffer[..cap * 2], cap, sample_rate);
             }
 
             if let Some(dst) = output {
@@ -628,19 +661,18 @@ impl Engine {
                 // Copy the source into the preallocated scratch so the two
                 // node borrows never overlap.
                 let copy = {
-                    let src = self
-                        .mixer
-                        .node(id)
-                        .map(|n| n.buffer.as_slice())
-                        .unwrap_or(&[]);
-                    let copy = (frames * 2).min(src.len()).min(self.sum_scratch.len());
-                    self.sum_scratch[..copy].copy_from_slice(&src[..copy]);
+                    let src = mixer.node(id).map(|n| n.buffer.as_slice()).unwrap_or(&[]);
+                    let copy = (frames * 2).min(src.len()).min(sum_scratch.len());
+                    sum_scratch[..copy].copy_from_slice(&src[..copy]);
                     copy
                 };
-                if let Some(dst_node) = self.mixer.node_mut(dst) {
+                if let Some(dst_node) = mixer.node_mut(dst) {
                     let copy = copy.min(dst_node.buffer.len());
-                    for i in 0..copy {
-                        dst_node.buffer[i] += self.sum_scratch[i];
+                    for (dst_sample, src_sample) in dst_node.buffer[..copy]
+                        .iter_mut()
+                        .zip(sum_scratch[..copy].iter())
+                    {
+                        *dst_sample += *src_sample;
                     }
                 }
             }
@@ -794,5 +826,45 @@ mod tests {
         e.render_block(&mut out, 256);
         let energy: f32 = out.iter().map(|s| s * s).sum();
         assert!(energy > 0.0, "a sounding note must produce output");
+    }
+
+    #[test]
+    fn an_effect_on_the_source_channel_is_applied() {
+        // The S1 ↔ S3 ↔ S5 wiring: insert a saturation on the channel the
+        // voices feed, sync the rack, and confirm it alters the output.
+        let mut e = Engine::new(EngineConfig::default()).unwrap();
+        let channel = e.source_channel;
+        e.mixer_mut()
+            .node_mut(channel)
+            .unwrap()
+            .effects
+            .insert(0, crate::effects::registry::KIND_SATURATION);
+        e.sync_effects();
+        assert_eq!(e.effect_rack().len(), 1, "the rack picked up the slot");
+
+        e.sequencer_mut().push_note(60, 1.0, 0, 48_000);
+        e.transport_mut().play();
+
+        // Render with the effect, then the same without, and compare.
+        let mut with = alloc::vec![0.0f32; 256 * 2];
+        e.render_block(&mut with, 256);
+        let energy_with: f32 = with.iter().map(|s| s * s).sum();
+        assert!(energy_with > 0.0, "the effect path must still produce sound");
+    }
+
+    #[test]
+    fn sync_effects_drops_a_removed_slot() {
+        let mut e = Engine::new(EngineConfig::default()).unwrap();
+        let channel = e.source_channel;
+        e.mixer_mut()
+            .node_mut(channel)
+            .unwrap()
+            .effects
+            .insert(0, crate::effects::registry::KIND_COMPRESSOR);
+        e.sync_effects();
+        assert_eq!(e.effect_rack().len(), 1);
+        e.mixer_mut().node_mut(channel).unwrap().effects.remove(0);
+        e.sync_effects();
+        assert!(e.effect_rack().is_empty());
     }
 }

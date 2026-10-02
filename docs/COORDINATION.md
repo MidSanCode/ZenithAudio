@@ -255,4 +255,13 @@
 | **回滚方式** | `git revert` 对应提交。S1 代码全部位于 `src/engine/**`、`src/driver/**`、`src/transport/**`、`src/dsp/**`、`src/voice/**`、`src/ffi/engine_api.rs`；`types.rs` / `mod.rs` / `lib.rs` 的改动是**纯追加**，可单独回退 S1 段而不影响 S2/S3/S5。 |
 | **状态** | 🟢 已生效（`cargo test` / `clippy` / `wasm32 check` 结论见 `docs/stages/s1.1-report.md`） |
 
+> **C-013 补充（同日）**：新增 `src/engine/effects_rack.rs`，把 S3 效果槽的 kind
+> 实例化为 S5 处理器并在音频线程运行（S1↔S3↔S5 接线）；`Engine::process_mixer`
+> 现按拓扑序调用 `EffectRack::process`，`Engine::sync_effects` 为控制线程同步入口。
+> 效果参数在块边界从 S2 `ParameterStore` 推送。`src/engine/**` 属 Agent-A 自有目录，
+> 不改动 S3/S5 所有权文件。门禁复跑：`cargo test` **970 passed / 0 failed**、
+> `clippy` exit 0、wasm32 exit 0、`flutter analyze` **0 error**、
+> `flutter test` **190 passed**（唯一失败为 Windows 专属 `registry_quoting_test.dart`）、
+> 构建 dylib 后 FFI 冒烟 **8 passed**。
+
 
