@@ -81,6 +81,39 @@ fn describe_entry(entry: &'static registry::EffectEntry) -> ZenithEffectDescript
     }
 }
 
+/// An opaque handle to a live effect instance (ABI §6.5b).
+///
+/// # Why this exists rather than a Rust trait object
+///
+/// The two instance-side queries need a live processor, and the natural Rust
+/// spelling is `*const dyn EffectProcessor`. That is a **fat** pointer (data
+/// plus vtable) with no C equivalent, so passing it across `extern "C"`
+/// violates P1 ("only C-compatible types") and the compiler rejects it as not
+/// FFI-safe. It also invites the caller to reason about a two-word pointer the
+/// ABI never promised.
+///
+/// Instead the processor is boxed behind this opaque type and the ABI deals in
+/// a **thin** `*const ZenithEffectProcessor`, exactly as S2's `ZenithAutomation`
+/// and S3's `ZenithMixer` are dealt with (P2). Dart holds the pointer and hands
+/// it straight back; it never interprets the memory.
+///
+/// No public constructor is exported yet: in the product this handle is handed
+/// out by the engine for one of its live effect slots, which is S1/S3 wiring
+/// rather than part of the S5 query surface. The constructor is crate-visible so
+/// the engine - and the tests here - can build one.
+pub struct ZenithEffectProcessor {
+    /// The boxed processor. Private so Dart cannot reach into it.
+    processor: alloc::boxed::Box<dyn crate::effects::EffectProcessor>,
+}
+
+impl ZenithEffectProcessor {
+    /// Wraps a processor in the opaque handle.
+    #[must_use]
+    pub fn new(processor: alloc::boxed::Box<dyn crate::effects::EffectProcessor>) -> Self {
+        Self { processor }
+    }
+}
+
 // ── Enumeration ──
 
 /// Returns how many built-in effects this build knows about.
@@ -263,23 +296,26 @@ pub extern "C" fn zenith_effect_parameter_count(kind: u32) -> u32 {
 
 /// Returns how many parameters an effect instance publishes.
 ///
-/// Passing a `dyn` trait object across the boundary keeps the concrete type out
-/// of the ABI, which is what lets Dart drive an effect it has never heard of.
+/// `processor` is an opaque [`ZenithEffectProcessor`] handle, so the concrete
+/// effect type stays out of the ABI and Dart can drive an effect it has never
+/// heard of. See that type for why the handle is a thin pointer rather than a
+/// `dyn` trait object.
 ///
 /// Returns `0` when `processor` is null.
 ///
 /// # Safety
 ///
-/// `processor` must be null or a live `*const dyn EffectProcessor`.
+/// `processor` must be null or a live `*const ZenithEffectProcessor` created by
+/// this crate.
 #[no_mangle]
 pub extern "C" fn zenith_effect_instance_parameter_count(
-    processor: *const dyn crate::effects::EffectProcessor,
+    processor: *const ZenithEffectProcessor,
 ) -> u32 {
     // SAFETY: the caller guarantees the pointer is live, or null.
     let Some(processor) = (unsafe { processor.as_ref() }) else {
         return 0;
     };
-    u32::try_from(processor.parameters().len()).unwrap_or(u32::MAX)
+    u32::try_from(processor.processor.parameters().len()).unwrap_or(u32::MAX)
 }
 
 /// Describes parameter `ordinal` of a live effect instance.
@@ -293,12 +329,12 @@ pub extern "C" fn zenith_effect_instance_parameter_count(
 ///
 /// # Safety
 ///
-/// `processor` must be null or a live `*const dyn EffectProcessor`;
-/// `out_descriptor` must be null or point to a writable
+/// `processor` must be null or a live `*const ZenithEffectProcessor` created by
+/// this crate; `out_descriptor` must be null or point to a writable
 /// [`ZenithParamDescriptor`].
 #[no_mangle]
 pub extern "C" fn zenith_effect_instance_describe_parameter(
-    processor: *const dyn crate::effects::EffectProcessor,
+    processor: *const ZenithEffectProcessor,
     ordinal: u32,
     out_descriptor: *mut ZenithParamDescriptor,
 ) -> Status {
@@ -307,7 +343,7 @@ pub extern "C" fn zenith_effect_instance_describe_parameter(
         let Some(processor) = (unsafe { processor.as_ref() }) else {
             return Status::NullPointer;
         };
-        let table = processor.parameters();
+        let table = processor.processor.parameters();
         let Some(spec) = table.get(ordinal as usize) else {
             return Status::OutOfRange;
         };
@@ -450,7 +486,6 @@ pub extern "C" fn zenith_effect_category_analysis() -> u32 {
 mod tests {
     use super::*;
     use crate::automation::parameter::ParameterAddress;
-    use crate::effects::EffectProcessor;
     use core::ffi::CStr;
 
     /// Reads a static C string the way Dart would.
@@ -505,13 +540,15 @@ mod tests {
         }
     }
 
-    /// Creates and prepares an effect instance, leaking nothing: the returned
-    /// `Box` owns it for the caller's scope.
-    fn instance(kind: u32) -> alloc::boxed::Box<dyn EffectProcessor> {
+    /// Creates and prepares an effect instance as the opaque ABI handle.
+    ///
+    /// The handle owns the processor, so the returned value keeps it alive for
+    /// the caller's scope and the pointer stays valid for as long as it does.
+    fn instance(kind: u32) -> alloc::boxed::Box<ZenithEffectProcessor> {
         let address = ParameterAddress::effect(0, 0, 0);
         let mut processor = registry::create(kind, address).expect("registered kind");
         processor.prepare(48_000.0, 256, 2);
-        processor
+        alloc::boxed::Box::new(ZenithEffectProcessor::new(processor))
     }
 
     #[test]
@@ -643,7 +680,7 @@ mod tests {
             assert!(static_count > 0, "{kind:#x} publishes no parameters");
 
             let processor = instance(kind);
-            let reference: *const dyn EffectProcessor = alloc::boxed::Box::as_ref(&processor);
+            let reference: *const ZenithEffectProcessor = alloc::boxed::Box::as_ref(&processor);
             let instance_count = zenith_effect_instance_parameter_count(reference);
             assert_eq!(
                 static_count, instance_count,
@@ -661,7 +698,7 @@ mod tests {
             assert_eq!(zenith_effect_kind_at(index, &mut kind), Status::Ok);
 
             let processor = instance(kind);
-            let reference: *const dyn EffectProcessor = alloc::boxed::Box::as_ref(&processor);
+            let reference: *const ZenithEffectProcessor = alloc::boxed::Box::as_ref(&processor);
             let count = zenith_effect_parameter_count(kind);
 
             for ordinal in 0..count {
@@ -724,23 +761,11 @@ mod tests {
 
     #[test]
     fn a_null_processor_is_reported_not_dereferenced() {
-        // A null fat pointer cannot be written as `ptr::null()` (the vtable
-        // half cannot be inferred), transmuted from a thin pointer (the sizes
-        // differ), or built with `zeroed()` (a null vtable is an invalid value
-        // and panics under debug assertions).
-        //
-        // Recovering one instead: `None` *is* an all-zero fat pointer, and
-        // `Option<*const T>` is guaranteed to share the pointer's
-        // representation, so copying the bytes of a `None` back out as the raw
-        // pointer is the supported construction. This is exactly what a C
-        // caller passing NULL produces, which is the case to cover.
-        let slot: Option<*const dyn EffectProcessor> = None;
-        // SAFETY: `Option<*const dyn T>` has the same layout as `*const dyn T`
-        // here, because a null pointer is `None`; the standard library
-        // guarantees this for pointer types, and a null pointer is valid for
-        // every check the two functions under test perform.
-        let null: *const dyn EffectProcessor = unsafe { core::mem::transmute_copy(&slot) };
-        assert!(null.is_null(), "the recovered pointer must be null");
+        // A null pointer is a legal argument and must be answered with a status
+        // code rather than dereferenced (ABI P10: errors are return values, not
+        // null out-parameters). The handle is now a thin pointer, so `null()`
+        // is exactly what a C caller passing NULL produces.
+        let null: *const ZenithEffectProcessor = core::ptr::null();
         assert_eq!(zenith_effect_instance_parameter_count(null), 0);
 
         let mut mirror = impossible_param_descriptor();

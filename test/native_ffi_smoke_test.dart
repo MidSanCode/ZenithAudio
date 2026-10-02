@@ -1,5 +1,12 @@
+import 'dart:ffi';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:zenith_audio/engine/ffi/edit_bindings.dart';
+import 'package:zenith_audio/engine/ffi/engine_bindings.dart';
+import 'package:zenith_audio/engine/ffi/engine_types.dart';
 import 'package:zenith_audio/native/zenith_core.dart';
+import 'package:zenith_audio/services/wav_encoder.dart';
 
 /// S0: the FFI link probe.
 ///
@@ -79,6 +86,106 @@ void main() {
       final stamp = ZenithCore.expectedAbiVersion;
       final expected = '${stamp >> 16}.${(stamp >> 8) & 0xFF}.${stamp & 0xFF}';
       expect(ZenithCore.versionString(), expected);
+    });
+
+    test('[S1] the engine struct mirrors match the core', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final sizes = EngineStructSizes.read();
+      expect(sizes, isNotNull, reason: 'the S1 sizeof helpers must resolve');
+      // Dart's idea of each layout against the core's, so a field reorder or a
+      // width change surfaces as a loud failure rather than silent misreads.
+      expect(sizes!.engineConfig, sizeOf<ZenithEngineConfig>());
+      expect(sizes.engineStatus, sizeOf<ZenithEngineStatus>());
+      expect(sizes.musicalTime, sizeOf<ZenithMusicalTime>());
+    });
+
+    test('[S1] an engine can be created, driven and destroyed', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final engine = ZenithEngineHandle.create(sampleRate: 48000, blockSize: 256);
+      expect(engine, isNotNull);
+      addTearDown(engine!.dispose);
+
+      expect(engine.play(), isTrue);
+      // One beat at 120 BPM is 960 ticks = 24000 frames at 48 kHz.
+      expect(engine.seekTicks(960), isTrue);
+      final status = engine.readStatus();
+      expect(status.playheadFrames, 24000);
+      expect(status.sampleRate, 48000);
+      expect(status.isPlaying, isTrue);
+
+      final out = Float32List.fromList(List<double>.filled(256 * 2, 0));
+      expect(engine.render(out, 256), isTrue);
+    });
+
+    test('[S1] the offline driver is reported as supported', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+      expect(engineDriverSupported(ZenithDriverKind.offline), isTrue);
+    });
+
+    test('[S4] offline rendering returns a WAV-encodable buffer', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final engine = ZenithEngineHandle.create(sampleRate: 48000, blockSize: 256);
+      expect(engine, isNotNull);
+      addTearDown(engine!.dispose);
+
+      // Render one beat (960 ticks) at 120 BPM = 24000 frames.
+      final samples = engine.renderOffline(startTicks: 0, endTicks: 960);
+      expect(samples, isNotNull);
+      expect(samples!.length, 24000 * 2, reason: 'interleaved stereo');
+
+      final wav = encodeWav(samples, channels: 2, sampleRate: 48000);
+      final header = probeWavHeader(wav);
+      expect(header, isNotNull);
+      expect(header!.channels, 2);
+      expect(header.sampleRate, 48000);
+      expect(header.dataBytes, 24000 * 2 * 2);
+
+      expect(engine.pdcLatency(), 0, reason: 'no effects => no PDC delay');
+    });
+
+    test('[S8] audio-edit bindings run through the FFI', () {
+      if (!available) {
+        markTestSkipped('native library not built');
+        return;
+      }
+
+      final input = Float32List.fromList(
+        List<double>.generate(4000, (i) => (i % 100 < 50) ? 0.5 : -0.5),
+      );
+
+      final stretched = AudioEditBindings.timeStretch(input, 2.0);
+      expect(stretched, isNotNull);
+      expect((stretched!.length - 8000).abs() <= 1, isTrue);
+
+      final shifted = AudioEditBindings.pitchShift(input, 12.0);
+      expect(shifted, isNotNull);
+      expect((shifted!.length / input.length - 1.0).abs() < 0.05, isTrue);
+
+      final transients = AudioEditBindings.detectTransients(input);
+      expect(transients, isA<List<int>>());
+
+      final cross = AudioEditBindings.crossfade(
+        Float32List.fromList(List.filled(100, 1.0)),
+        Float32List.fromList(List.filled(80, 2.0)),
+        fade: 40,
+      );
+      expect(cross, isNotNull);
+      expect(cross!.length, 140);
     });
   });
 }

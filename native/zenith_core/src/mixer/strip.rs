@@ -266,9 +266,7 @@ mod tests {
         let mut s = strip();
         s.pan_law = PanLaw::Linear;
         let mut b = buffers();
-        for v in &mut b.output {
-            *v = 9.0;
-        }
+        b.output.fill(9.0);
         s.process(&[1.0, 1.0], 1, &mut b);
         assert!((b.output[0] - 1.0).abs() < 1e-6, "first frame written");
         assert_eq!(b.output[2], 0.0, "frame 1 beyond n must be cleared");
@@ -301,9 +299,7 @@ mod tests {
     fn zero_frames_is_a_no_op() {
         let mut s = strip();
         let mut b = buffers();
-        for v in &mut b.output {
-            *v = 5.0;
-        }
+        b.output.fill(5.0);
         s.process(&[1.0, 1.0], 0, &mut b);
         assert_eq!(b.output[0], 5.0, "a zero-frame block must not write");
         assert_eq!(s.last_gain(), 0.0);

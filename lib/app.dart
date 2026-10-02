@@ -8,10 +8,12 @@ import 'core/theme/app_theme.dart';
 import 'core/utils/logger.dart';
 import 'providers/project_provider.dart';
 import 'providers/settings_provider.dart';
+import 'engine/degradation_monitor.dart';
 import 'screens/editor_screen.dart';
 import 'screens/workspace_screen.dart';
 import 'services/project_serializer.dart';
 import 'services/single_instance.dart';
+import 'widgets/degrade/audio_degradation_banner.dart';
 
 class ZenithAudioApp extends ConsumerStatefulWidget {
   const ZenithAudioApp({super.key, this.initialProjectPath});
@@ -38,6 +40,13 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
     if (path != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _openProjectPath(path));
     }
+    // Start the degradation monitor. Its health source defaults to a healthy
+    // stub, so this is inert until an engine is wired in; starting it here makes
+    // that wiring a provider override rather than lifecycle plumbing in every
+    // screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(degradationMonitorProvider).start();
+    });
   }
 
   /// Opens a project handed over by a later launch.
@@ -79,6 +88,9 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
   void dispose() {
     windowManager.removeListener(this);
     SingleInstance.release();
+    // The provider also stops it; stopping here is belt-and-braces so the timer
+    // does not outlive the widget.
+    ref.read(degradationMonitorProvider).stop();
     super.dispose();
   }
 
@@ -125,7 +137,18 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
       locale: context.locale,
       // The app opens on the workspace home screen (recent projects, new/open)
       // and pushes the editor on top of it once a project is loaded.
+      //
+      // The degradation banner is injected above whatever page is showing, via
+      // `builder`, so it is present on every screen without each screen
+      // remembering to add it. It is a sibling of the page (a Column), not an
+      // overlay, so it pushes content down instead of covering the toolbar.
       home: const WorkspaceScreen(),
+      builder: (context, child) => Column(
+        children: [
+          const AudioDegradationBanner(),
+          Expanded(child: child ?? const SizedBox.shrink()),
+        ],
+      ),
     );
   }
 }

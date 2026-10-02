@@ -21,7 +21,7 @@
 //! computed coefficients. Design (`set_*`) happens on the control thread, but
 //! is also allocation-free, so a UI that sweeps a cutoff does not allocate.
 
-use super::super::util::dsp::{clamp_frequency, cos_poly, sin_poly, sqrt, tan_poly};
+use super::super::util::dsp::{clamp_frequency, cos_poly, sin_poly, sqrt};
 use core::f32::consts::PI;
 
 /// Which response a [`Biquad`] implements.
@@ -573,7 +573,8 @@ mod tests {
         let mut biquad = Biquad::default();
         biquad.design(FilterMode::LowPass, 500.0, 0.707, 0.0, SR);
         for _ in 0..1000 {
-            biquad.process(0.5);
+            // Warming the history; the intermediate outputs are not of interest.
+            let _ = biquad.process(0.5);
         }
         biquad.design(FilterMode::LowPass, 5000.0, 0.707, 0.0, SR);
         assert!((biquad.magnitude_db_at(5000.0, SR) + 3.0).abs() < 0.3);
@@ -625,7 +626,7 @@ mod tests {
         let mut biquad = Biquad::default();
         biquad.design(FilterMode::LowPass, 1000.0, 0.707, 0.0, SR);
         for _ in 0..500 {
-            biquad.process(1.0);
+            let _ = biquad.process(1.0);
         }
         biquad.reset();
         assert_eq!(biquad.x1, 0.0);

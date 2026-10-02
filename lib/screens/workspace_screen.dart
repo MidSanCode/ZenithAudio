@@ -15,6 +15,7 @@ import '../services/cloud_sync_service.dart';
 import '../services/workspace_service.dart';
 import '../widgets/sync/sync_settings_dialog.dart';
 import '../widgets/sync/sync_status.dart';
+import '../widgets/dialogs/project_migration_dialog.dart';
 import 'about_dialog.dart' as app;
 import 'editor_screen.dart';
 import 'settings_page.dart';
@@ -208,7 +209,10 @@ class _ActionColumn extends ConsumerWidget {
             label: 'workspace.openProject'.tr(),
             filled: false,
             onTap: () async {
-              final ok = await ref.read(projectProvider.notifier).openProject();
+              final ok = await ref.read(projectProvider.notifier).openProject(
+                    confirmMigration: (probe) =>
+                        confirmProjectMigration(context, probe),
+                  );
               if (!ok || !context.mounted) return;
               await Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const EditorScreen()),

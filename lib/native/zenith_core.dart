@@ -23,16 +23,18 @@ import 'package:ffi/ffi.dart';
 /// ABI version this Dart code was written against, in the same
 /// `major<<16 | minor<<8 | patch` layout the Rust side uses.
 ///
-/// `0.4.0`. The minor counter is a **single linear sequence shared by every
+/// `0.7.0`. The minor counter is a **single linear sequence shared by every
 /// agent** adding to the ABI, not a per-stage number. S2 (parameter and
-/// automation) claimed `0.2.0`; S3 (mixer) then claimed `0.3.0`; S5 (the
-/// built-in effect suite's query surface) claimed `0.4.0` by bumping the same
-/// `ABI_VERSION` constant. This must therefore track whatever the core
-/// currently reports, not "the S2 number" — the runtime check is an exact
-/// comparison, so a stale constant fails loudly by design (ABI §2.3).
+/// automation) claimed `0.2.0`; S3 (mixer) claimed `0.3.0`; S5 (effect query
+/// surface) claimed `0.4.0`; S1 (engine and transport) claimed `0.5.0`; S4
+/// (offline rendering and PDC) claimed `0.6.0`; S8 (offline audio-edit
+/// algorithms) claimed `0.7.0`. This must track whatever the core reports, not
+/// "the S2 number" — the runtime check is exact, so a stale constant fails
+/// loudly by design (ABI §2.3).
 ///
-/// Registered as C-002 / C-009 / C-011 in `docs/COORDINATION.md`.
-const int kExpectedAbiVersion = 0x000400; // 0.4.0
+/// Registered as C-002 / C-009 / C-011 / C-013 / C-014 / C-016 in
+/// `docs/COORDINATION.md`.
+const int kExpectedAbiVersion = 0x000700; // 0.7.0
 
 // ── C signatures ──
 

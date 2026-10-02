@@ -218,7 +218,8 @@
 | **与 S2 的关系** | 效果参数用 `ParameterKind::Effect`（判别值 3，**已冻结**）注册，槽索引复用 `ParameterAddress::effect(channel, slot, sub)` 的「通道高 24 位 / 槽低 8 位」打包。S5 **不新增寻址方式**，也不改动 S2 的求值顺序；效果参数因此**自动获得**自动化与调制能力（PLAN §3.S5 第 2 条）。 |
 | **影响面** | Agent-A（S1）：引擎接线时可在块边界依 `effect_chain` 的 `processing()` 顺序调用效果；`latency_samples()` 供 S4 的 PDC。Agent-D（S3）：混合器的效果槽现在有了可解析的 kind 语义（解析函数在 `effects::registry`），`effect_chain.rs` **无需改动**。Dart 侧 `lib/native/zenith_core.dart` 的 `kExpectedAbiVersion` 需同步为 `0x000400`。 |
 | **回滚方式** | `git revert <S5 各笔提交>`。S5 代码全部位于 `src/effects/**`、`src/ffi/effect_api.rs`、`lib/effects/**`、`lib/widgets/effects/**`；`types.rs` 与 `mod.rs` 的改动是**纯追加**，可单独回退 S5 段而不影响 S2/S3。 |
-| **状态** | 🟡 进行中 |
+| **收尾实测（2026-10-05）** | `cargo test` **866 passed / 0 failed**（含修复后的 distortion 75 项）、`cargo clippy --all-targets -- -D warnings` **exit 0**、`cargo check --target wasm32-unknown-unknown` **exit 0**。**SIMD 已落地**：`effects/util/simd.rs`，cfg 分平台（aarch64 NEON / wasm32 simd128 / 标量回退），接入饱和、多模、卷积、EQ 四个热点。ABI 签名修正：`zenith_effect_instance_parameter_count` / `zenith_effect_instance_describe_parameter` 的 `*const dyn EffectProcessor`（胖指针，违反 P1）改为不透明细指针 `*const ZenithEffectProcessor`（符合 P2），未新增导出。⚠️ Dart 门禁因本机未装 Flutter SDK 未取得（同 S3）。见 `docs/stages/s5-report.md` |
+| **状态** | 🟢 已生效 |
 
 ---
 
@@ -235,6 +236,81 @@
 | **为何值得登记** | 这个失败**方向是危险的**：它不是说「测试太严」，而是让一条**真实的安全保证**（PLAN §3.S2「求值路径零分配」、ABI P5）在 CI 上长期红着，久而久之会被当作「已知 flaky」而忽略——那么真正的分配回归就再也拦不住了。改为线程局部后，每条测试只对自己线程的分配作判断，这正是「音频线程不分配」的本义。同时**保留了反向测试**：一个坏掉的看门狗仍会被它抓出来，零分配测试不会变成空转。 |
 | **影响面** | 仅测试代码，无 ABI 改动、无产品行为改动。 |
 | **回滚方式** | `git revert` 对应提交。 |
+| **状态** | 🟢 已生效 |
+
+---
+
+### C-013 · ABI 新增 S1 引擎/传输导出面（minor +1）+ 注册 `src/engine|driver|transport|dsp|voice/**` 所有权
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S1 Rust 实时音频核心） |
+| **变更（自有目录，仅备查）** | 新增 `native/zenith_core/src/engine/**`（`mod` / `graph` / `node` / `render_context` / `realtime`）、`src/driver/**`（`mod` / `offline_driver`，以及 `cpal_driver` 的 feature 门控骨架）、`src/transport/**`（`mod` / `transport` / `sequencer` / `event_queue`）、`src/dsp/**`（`mod` / `biquad` / `svf` / `fft` / `resampler`）、`src/voice/**`（`mod` / `voice_allocator` / `synth_voice` / `sampler`）。这些目录按本文档开头「非共享」定义本属 Agent-A。**不改动** `src/automation/**`（Agent-C）、`src/mixer/**`（Agent-D）、`src/effects/**`（Agent-C）。 |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/engine_api.rs`（`zenith_engine_*` / `zenith_transport_*` / `zenith_sizeof_engine*`）；② `src/ffi/mod.rs` **追加一行** `pub mod engine_api;`（不改动 `param_api` / `mixer_api` / `effect_api` / `types` 既有行）；③ `src/ffi/types.rs` **文件末尾追加** `// ── S1 engine & transport ──` 段（`ZenithMusicalTime` / `ZenithEngineConfig` / `ZenithEngineStatus` + 尺寸常量与转换），S0/S2/S3/S5 段**一字未改**；④ `src/lib.rs` 增加 `pub mod engine; pub mod driver; pub mod transport; pub mod dsp; pub mod voice;`，并把 `ABI_VERSION` 由 `0.4.0` 升至 **`0.5.0`**。 |
+| **ABI 依据** | 遵循 C-011 末尾交代：「后续阶段再追加导出请用 0.5.0」。与 S2/S3/S5 同一依据（`docs/ABI.md` §2.2）：**纯新增**导出函数与**纯追加**结构体，无既有签名/字段序/枚举判别值改动，属向后兼容的 minor 递增。 |
+| **新增导出函数** | `zenith_engine_create` / `zenith_engine_destroy` / `zenith_engine_start` / `zenith_engine_stop` / `zenith_engine_prepare` / `zenith_transport_play` / `zenith_transport_pause` / `zenith_transport_stop` / `zenith_transport_seek` / `zenith_transport_set_loop` / `zenith_transport_set_tempo` / `zenith_transport_set_time_signature` / `zenith_engine_status` / `zenith_sizeof_engine_config` / `zenith_sizeof_engine_status` / `zenith_sizeof_musical_time`。 |
+| **实现范围声明** | 本轮落地 **`ZenithEngine` 句柄、`Transport`、tick 级 `Sequencer`、无锁 `EventQueue`、`engine/graph`（DSP 图 + 拓扑 + 环检测）、`driver::OfflineDriver`（确定性块推进，用于测试与离线）**，并接线 S2/S3/S5（块边界各调用一次 `automation::advance_block`、`mixer` 顺序处理、`effect_chain::processing()` 顺序调用效果）。**真实设备驱动（`cpal`）本轮不启用**：`cpal` 需外部 crate 依赖，本机处于离线环境且用户明确要求不得安装软件包 / 不得污染系统环境；`driver/cpal_driver.rs` 仅提供 `cfg(feature = "cpal")` 门控骨架，默认构建走 `OfflineDriver`，`zenith_engine_start` 在无设备驱动时以 `Status::Unsupported` 明确上报而非假装成功。SIMD 热路径与 128 轨压力测试属 S9。 |
+| **影响面** | Agent-C/Agent-D：本轮在 `ffi/types.rs` 与 `ffi/mod.rs` 的改动均为**纯追加**，未触碰你们的段落；`ABI_VERSION` 已升至 `0.5.0`，后续追加请用 `0.6.0`。Dart 侧 `lib/native/zenith_core.dart` 的 `kExpectedAbiVersion` 需同步为 `0x000500`。 |
+| **回滚方式** | `git revert` 对应提交。S1 代码全部位于 `src/engine/**`、`src/driver/**`、`src/transport/**`、`src/dsp/**`、`src/voice/**`、`src/ffi/engine_api.rs`；`types.rs` / `mod.rs` / `lib.rs` 的改动是**纯追加**，可单独回退 S1 段而不影响 S2/S3/S5。 |
+| **状态** | 🟢 已生效（`cargo test` / `clippy` / `wasm32 check` 结论见 `docs/stages/s1.1-report.md`） |
+
+> **C-013 补充（同日）**：新增 `src/engine/effects_rack.rs`，把 S3 效果槽的 kind
+> 实例化为 S5 处理器并在音频线程运行（S1↔S3↔S5 接线）；`Engine::process_mixer`
+> 现按拓扑序调用 `EffectRack::process`，`Engine::sync_effects` 为控制线程同步入口。
+> 效果参数在块边界从 S2 `ParameterStore` 推送。`src/engine/**` 属 Agent-A 自有目录，
+> 不改动 S3/S5 所有权文件。门禁复跑：`cargo test` **970 passed / 0 failed**、
+> `clippy` exit 0、wasm32 exit 0、`flutter analyze` **0 error**、
+> `flutter test` **190 passed**（唯一失败为 Windows 专属 `registry_quoting_test.dart`）、
+> 构建 dylib 后 FFI 冒烟 **8 passed**。
+
+---
+
+### C-014 · ABI 新增 S4 离线渲染导出面（minor +1）+ 注册 `src/engine/{offline,pdc}.rs` 所有权
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S1/S4） |
+| **变更（自有目录，仅备查）** | 新增 `native/zenith_core/src/engine/offline.rs`（离线渲染：复用 `render_block`，同一 DSP 图，`OfflineDriver` 语义）、`src/engine/pdc.rs`（`PdcPlan` + `DelayLine`：按各通道效果链延迟做**相对对齐**）。均属 `src/engine/**`（Agent-A）。 |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/render_api.rs`（`zenith_render_offline` / `zenith_buffer_free` / `zenith_engine_pdc_latency` / `zenith_sizeof_*` 如需）；② `src/ffi/mod.rs` **追加一行** `pub mod render_api;`；③ `src/lib.rs` `ABI_VERSION` 由 `0.5.0` 升至 **`0.6.0`**。 |
+| **ABI 依据** | `docs/ABI.md` §2.2 纯新增；兑现 §6.8 既定契约（`zenith_render_offline` / `zenith_buffer_free` 的签名在 S0 已冻结）。 |
+| **新增导出函数** | `zenith_render_offline(engine, start, end, target_sample_rate, out_buffer, out_frames)`、`zenith_buffer_free(buffer, frames)`、`zenith_engine_pdc_latency(engine, out)`。 |
+| **实现范围声明** | 离线渲染**复用同一 `Engine::render_block`**，不存在第二套 DSP；PDC 以通道间**相对对齐**实现（含延迟效果的通道不再与其他通道错位）。绝对管线延迟等于最大效果延迟，实时与离线一致，故逐样本一致。WAV 编码（16/24/32-bit PCM 与 32-bit float）在 Dart 侧 `lib/services/offline_export.dart`。 |
+| **影响面** | 后续追加请用 `0.7.0`；Dart `kExpectedAbiVersion` 同步为 `0x000600`。 |
+| **回滚方式** | `git revert`；均为纯追加，可单独回退 S4 段。 |
+| **状态** | 🟢 已生效（门禁见 `docs/stages/s4-report.md`） |
+
+---
+
+### C-015 · 注册 `src/edit/**` 所有权（S8，无 ABI 变更）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S8） |
+| **变更（自有目录）** | 新增 `native/zenith_core/src/edit/**`（`mod` / `time_stretch` / `transient` / `crossfade`），并在 `src/lib.rs` 增加 `pub mod edit;`。**不涉及任何 ABI 变更**（`ABI_VERSION` 仍为 `0.6.0`），因为该模块目前只暴露 crate 内 API，供后续 FFI 包装。 |
+| **理由** | PLAN §3.S8 的算法层「是独立的纯函数（Float32 数组进、Float32 数组出），可以脱离引擎先实现并配单元测试」——正是本轮所做。 |
+| **范围** | 时间拉伸（WSOLA）、变调（重采样+拉伸）、瞬态检测、交叉淡化。均为 `&[f32] → Vec<f32>`，可分配、非实时路径。 |
+| **影响面** | 仅 `src/lib.rs` 追加一行 `pub mod edit;`。不改动其他 agent 目录。 |
+| **回滚方式** | `git revert`；删除 `src/edit/**` 与 `lib.rs` 一行即可。 |
+| **状态** | 🟢 已生效 |
+
+---
+
+### C-016 · ABI 新增 S8 音频编辑导出面（minor +1）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S8） |
+| **变更（共享文件，本条预登记）** | ① **新增** `native/zenith_core/src/ffi/edit_api.rs`（`zenith_time_stretch` / `zenith_pitch_shift` / `zenith_detect_transients` / `zenith_crossfade` 及其配套 `zenith_buffer_free` 复用）；② `src/ffi/mod.rs` **追加一行** `pub mod edit_api;`；③ `src/lib.rs` `ABI_VERSION` 由 `0.6.0` 升至 **`0.7.0`**。 |
+| **ABI 依据** | `docs/ABI.md` §2.2 纯新增导出，无既有签名/字段序改动。 |
+| **新增导出函数** | `zenith_time_stretch(in_ptr, in_len, factor, out_ptr, out_len, out_count)`、`zenith_pitch_shift(...)`、`zenith_detect_transients(in_ptr, in_len, out_ptr, out_capacity, out_count)`、`zenith_crossfade(a_ptr, a_len, b_ptr, b_len, fade, curve, out_ptr, out_len, out_count)`。 |
+| **内存约定** | 与 §6.8 的离线渲染一致：输入由调用方提供（Rust 只读、不持有），输出由 **Rust 分配**并返回 `*mut f32`，调用方必须以相同长度调 `zenith_buffer_free`。瞬态检测输出为 `u32` 索引数组，同样 Rust 分配、`zenith_buffer_free` 释放（按元素计）。 |
+| **实时安全** | **非**实时安全：均为离线批处理、会分配。仅在控制/工作线程调用。 |
+| **影响面** | Dart `kExpectedAbiVersion` 同步为 `0x000700`。 |
+| **回滚方式** | `git revert`；`edit_api.rs` 为纯新增，`mod.rs` / `lib.rs` 为纯追加，可单独回退不影响 S1/S2/S3/S4/S5。 |
 | **状态** | 🟢 已生效 |
 
 

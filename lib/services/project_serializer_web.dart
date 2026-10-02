@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:html' as html;
+import 'dart:io' show Directory;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -110,6 +111,49 @@ class ProjectSerializer {
     anchor.remove();
     html.Url.revokeObjectUrl(url);
   }
+
+  // ── Directory-mode API (desktop only) ──
+  //
+  // The persistence layer (`providers/project_io.dart`, `cloud_sync_service`,
+  // `sync_provider`) is shared by both platforms and is *statically typed*
+  // against the io serializer's directory methods. The browser has no writable
+  // project directory, so these cannot do anything meaningful here — but they
+  // must exist with the same signatures or the web build fails to compile
+  // before any `kIsWeb` branch runs. Every caller guards on `kIsWeb`, so none
+  // of these is ever reached on the web; each throws if it somehow is, which is
+  // a loud, correct failure rather than silent data loss.
+  //
+  // The parameter type is `dart:io`'s `Directory`, which resolves on the web to
+  // a throwing stub — enough for the compiler, never instantiated in the
+  // guarded paths.
+
+  /// Desktop only. Always throws on the web.
+  Future<int> writeProjectDirectory(
+    Project project,
+    Directory projectDir, {
+    LgdfProjectInfo? existingInfo,
+  }) async =>
+      throw UnsupportedError(
+        'Directory projects are not available on the web; use serialize().',
+      );
+
+  /// Desktop only. Always throws on the web.
+  Future<Uint8List> packProjectDirectory(Directory projectDir) async =>
+      throw UnsupportedError(
+        'Directory projects are not available on the web.',
+      );
+
+  /// Desktop only. Always throws on the web.
+  Future<SerializedProject?> readProjectDirectory(Directory projectDir) async =>
+      throw UnsupportedError(
+        'Directory projects are not available on the web.',
+      );
+
+  /// Desktop only. Always throws on the web.
+  Future<void> unpackProjectArchive(Uint8List bytes, Directory targetDir) async =>
+      throw UnsupportedError(
+        'Directory projects are not available on the web.',
+      );
 
   /// Reads an LGDF archive (or a legacy `.zap`) into a [SerializedProject].
   Future<SerializedProject?> deserialize(Uint8List bytes) async {

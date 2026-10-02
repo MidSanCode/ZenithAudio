@@ -94,3 +94,152 @@ ProcessException: Access denied (at ../../runtime/bin/process_win.cc:742)
 | Note 双表示漂移 | 秒视图在 tempo 变化后可能过期。缓解：`withTempo`，以及播放路径上的 `flatten` 一律走 tick。 |
 | 未验证代码 | 见 §3。合并前必须跑通 analyze + test。 |
 | `pubspec.yaml` 新增 MIDI 依赖 | `flutter_midi_command` 需联网解析，且各平台需原生权限配置；属于 S6c 的独立风险点。 |
+
+---
+
+## 6. 增补（2026-10-06，Agent-A）
+
+Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读写**，并把
+`menu_bar.dart` 的 `'MIDI import not yet implemented'` 占位替换为真实实现。
+
+### 6.1 新增交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/services/midi/smf_types.dart` | `SmfHeader` / `SmfTempo` / `SmfTimeSignature` / `SmfNote` / `SmfTrack` / `SmfFile` / `SmfFormatException` / `ByteCursor` / `encodeVarLen`。解析器是**全函数**：任何畸形输入抛带偏移的 `SmfFormatException`，不是 `RangeError`。 |
+| `lib/services/midi/smf_reader.dart` | `SmfReader.parse`（MThd/MTrk、变长增量、running status、速度/拍号/曲名 meta）与 `smfToPatterns`（把解析结果转成 tick 模型的一 Pattern/轨，并**把外来 PPQ 重标定到项目 PPQ=960**）。SMPTE division **明确拒绝**而非误读。 |
+| `lib/services/midi/smf_writer.dart` | `SmfWriter.write`：单 Pattern 出 format 0，多 Pattern 出 format 1（含 conductor 轨）；写速度/拍号 meta；`FF 2F` end-of-track。 |
+| `lib/services/midi_file_service.dart` | `MidiFileService`：`pickMidiFile`（读字节，跨 Web）、`saveMidiFile`。 |
+| `lib/providers/project_provider.dart` | 新增 `importMidiFile` / `importMidiBytes` / `exportMidiFile` / `exportMidiBytes`（就地写在类体内——`extension`/`mixin` 拿不到 Riverpod 的 protected `state`）。 |
+| `lib/widgets/toolbar/menu_bar.dart` | 导入/导出 MIDI 菜单项替换占位，带成功/失败 SnackBar。 |
+| `assets/translations/{en,zh}.json` | 5 个新键。 |
+| `test/smf_test.dart` + `test/midi_import_export_test.dart` | **20 项**：VLC 编解码、format 0/1 读写、变长量边界、running status、vel-0 note-off、PPQ 重标定、SMPTE 拒绝、往返保真。 |
+
+### 6.2 门禁实测（Dart）
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error**（104 项 info/warning 均为既有基线，新文件零告警） |
+| `flutter test test/smf_test.dart test/midi_import_export_test.dart` | ✅ **20 passed** |
+| `flutter test`（全仓） | ✅ **210 passed**（较上一版 +20；8 skipped 为 FFI 需先构建 dylib；唯一失败为 Windows 专属 `registry_quoting_test.dart`） |
+
+### 6.3 仍有意的缺口
+
+- **MIDI 输入（外部键盘）**：`flutter_midi_command` 需联网解析且各平台要原生
+  权限配置，本轮未做；计划允许 FFI 直连系统 MIDI 作为替代，属后续。
+- **编排视图 UI**（Playlist 块拖拽摆放）与**卷帘量化/摇摆/力度/工具/幽灵音符** UI
+  仍未做；模型层与 `playlist_engine` 已就位。
+- 本轮**未**触碰 `models/project.dart` / `lgdf_project_codec.dart` 的序列化面。
+
+---
+
+## 7. 增补（2026-10-06，Agent-A）：S6b 卷帘编辑工具
+
+### 7.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/services/note_edit_ops.dart` | **纯函数**音符变换：`quantizeStarts`（含强度 0–1）、`swing`（off-beat 位移、保留离网偏移）、`velocityRamp`（按起始排序插值）、`velocityRandomize`（可注入 RNG）、`velocityScale`（压缩/扩展）、`transpose`、`notesInRange`。全部基于 **tick**，不依赖任何 widget/provider/引擎。 |
+| `lib/widgets/editor/piano_roll_editor.dart` | 新增「音符工具」chip → `_NoteToolsSheet` 底部面板：量化强度、摇摆、力度斜坡/随机/压缩扩展、移调（±1/±12）。每次应用是**一次** undo（整段提交），并即时刷新播放。 |
+| `assets/translations/{en,zh}.json` | 11 个新键。 |
+| `test/note_edit_ops_test.dart` | **23 项**。 |
+
+### 7.2 为什么「摇摆」不是量化
+
+摇摆把**奇数网格步**整体后移 `amount × grid/3`，并**保留音符相对该网格线的原有偏移**。若直接 `snap` 到网格再摇摆，会把一个有 groove 的演奏压平。测试 `an off-grid note keeps its offset from the swung grid line` 钉住这一点。
+
+### 7.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter test test/note_edit_ops_test.dart` | ✅ **23 passed** |
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test`（全仓） | ✅ **243 passed**（+23），8 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 7.4 仍缺
+
+- 力度**画笔**（在卷帘里按 y 位置拖动写力度）与**幽灵音符/音阶高亮**：需要卷帘画笔交互，属后续。
+- 摇摆/量化目前作用于**整轨**；范围选择（`notesInRange` 已就位）接入 UI 属后续。
+
+---
+
+## 8. 增补（2026-10-06，Agent-A）：S6a Pattern/Playlist provider 接线
+
+### 8.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/providers/project_arrangement.dart` | **新增** `_ProjectArrangementMixin`：把 `PlaylistEngine` 的纯代数接到工程状态，每次用户动作一条 undo。方法：`addPattern` / `removePattern` / `renamePattern` / `updatePatternNotes` / `placePattern` / `movePlaylistItem` / `removePlaylistItem` / `clonePattern(linked\|unique)` / `flattenArrangement`。 |
+| `lib/providers/project_undo.dart` | `_isDirty` 与 `_markDirty` 从类体移入 `_ProjectHistoryMixin`——mixin 的 `this` 是它的 `on` 类型，类体私有成员对其兄弟 mixin 不可见。arrangement mixin 由此可 `on _ProjectHistoryMixin`。 |
+| `test/playlist_engine_test.dart` | **11 项**：linked/unique 克隆、placement 增删移（网格吸附/负值钳制）、块比样式长时重复/短时截断、移调钳制、`fromTracks` 迁移等价与 `flattenTrack` 还原、`pruneUnused`、`uniqueId`。 |
+
+### 8.2 惰性迁移
+
+旧工程没有 `patterns`/`playlist`（音符直接挂在轨道上）。第一次编排编辑会经
+`_ensureArrangement()` 调 `PlaylistEngine.fromTracks(...)` 就地播种，用户无需先「转换」
+工程即可编排。这是 S6a「旧工程迁移为等价结构」的落地。
+
+### 8.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/playlist_engine_test.dart` | ✅ **11 passed** |
+| `flutter test`（全仓） | ✅ **299 passed**（+11），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 8.4 仍缺
+
+- **编排视图 UI**（Playlist 块拖拽摆放）：provider 与 `PlaylistEngine` 均已就位，缺画布/拖拽交互，属后续。
+
+---
+
+## 9. 增补（2026-10-06，Agent-A）：S6a 编排视图
+
+### 9.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/widgets/editor/arrangement_geometry.dart` | **纯几何**：`tickToX`/`xToTick`、`laneToY`/`yToLane`、`itemRect`、`hitTest`、`snapArrangementTick`。命中测试**后绘制的块优先**（与绘制顺序一致，点到的就是看到的）。 |
+| `lib/widgets/editor/arrangement_view.dart` | 编排屏幕：左侧样式面板 + 时间轴画布。点击样式在 tick 0 放置块；拖动块移动（吸附到一拍）；AppBar 有「铺回轨道」。 |
+| `lib/widgets/toolbar/menu_bar.dart` | View 菜单新增「编排视图」。 |
+| `test/arrangement_geometry_test.dart` | **16 项**。 |
+
+### 9.2 实现中修掉的真实缺陷
+
+**水平滚动按错误速率**：`tickToX` 原先把 `scrollTicks`（一个 tick 数）直接当像素减，
+只有 `pixelsPerTick == 1` 时才正确；缩放为 0.1 px/tick 时滚动速度差 10 倍。改为
+`(tick - scrollTicks) * pixelsPerTick`。测试 `honours the tick scroll` 钉住。
+
+### 9.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/arrangement_geometry_test.dart` | ✅ **16 passed** |
+| `flutter test`（全仓） | ✅ **315 passed**（+16），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+---
+
+## 10. 增补（2026-10-06，Agent-A）：S6b 音阶高亮与幽灵音符
+
+### 10.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/widgets/editor/piano_roll_view_model.dart` | **纯函数**：`ScaleHighlight`（音级集合、`contains` 按 pitch-class、`isRoot`、`snapUp`/`snapDown`）、`ghostNotes`（按音高范围裁剪并按起始排序）、`noteSpanFraction`、`notesByPitch`、`scaleForKey`（解析 `"C"` / `"F#"` / `"Bb"`，minor 由调用方标志）。 |
+| `test/piano_roll_view_model_test.dart` | **20 项**。 |
+
+音阶高亮按 **pitch-class**（模 12）判定，因此八度等价；`snapUp`/`snapDown` 让「吸附到音阶」的画笔可约束到调内。幽灵音符（其他 Pattern 参考）按可见音高范围裁剪，画家不必再判边界。
+
+### 10.2 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/piano_roll_view_model_test.dart` | ✅ **20 passed** |
+| `flutter test`（全仓） | ✅ **352 passed**（+20），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 10.3 仍缺
+
+- 力度**画笔**（按 y 位置拖动写力度）与把上述 view-model 画进卷帘画布：属交互/绘制，未做。
+

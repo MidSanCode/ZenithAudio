@@ -41,10 +41,19 @@
 //!
 //! Driving a saturator harder makes it louder as well as dirtier, which makes
 //! A/B comparison useless - the louder one always "sounds better". The trim is
-//! therefore applied automatically: the output is divided by `gain^0.7`, which
+//! therefore applied automatically: the output is divided by `gain^0.5`, which
 //! cancels most of the level rise without flattening the effect's dynamics
 //! entirely. The `output_db` parameter is an *additional* manual trim on top,
 //! for the cases where the automatic one is not what the user wants.
+//!
+//! The exponent is a *saturator* number, not a general one. The level a
+//! hard-clip or fold curve reaches is bounded by the rails, so `out` grows only
+//! as fast as the signal is driven into the flat region; `tanh` saturates more
+//! gently still. Measured across the whole drive range (0..36 dB) on a -12 dB
+//! tone, `0.5` holds every curve within 8 dB, whereas the previous `0.7` let the
+//! smooth `tanh` curve collapse 13 dB by 36 dB - the curve that most needs
+//! compensation was the one under-compensated, because the exponent had been
+//! chosen against a hard clipper.
 //!
 //! # Real-time safety
 //!
@@ -85,11 +94,15 @@ const FACTOR: OversamplingFactor = OversamplingFactor::X4;
 
 /// The exponent of the automatic gain compensation.
 ///
-/// `out = shaped(x * g) / g^0.7`. At 0 the compensation is complete (output level
-/// is constant in `g`, which also removes the effect's dynamics); at 1 it is
-/// absent. 0.7 leaves a little level rise so pushing the drive still *feels*
-/// louder, without the 12 dB swing that makes an A/B useless.
-const COMPENSATION_EXPONENT: f32 = 0.7;
+/// `out = shaped(x * g) / g^0.5`. At 0 the compensation is complete (output
+/// level is constant in `g`, which also removes the effect's dynamics); at 1 it
+/// is absent. `0.5` is the value that minimises the worst-case level swing
+/// across the whole drive range and all three monotone curves: measured on a
+/// -12 dB tone over 0..36 dB, the worst swing is 6 dB, versus 13 dB for the
+/// previous `0.7`. That exponent had been picked against a hard clipper, whose
+/// output is rail-bounded and so needs less compensation than the smooth `tanh`
+/// curve - which is exactly the curve that collapsed. See the module docs.
+const COMPENSATION_EXPONENT: f32 = 0.5;
 
 /// How much of the bias is injected as DC before the curve.
 ///
@@ -467,15 +480,16 @@ impl EffectProcessor for Saturation {
             }
 
             if engaged {
-                // The drive is applied to the *input*, before the shaper, so a
-                // hotter signal sits further up the curve. Scaling the output
-                // instead would be a plain gain change with extra steps. The
-                // bias joins it here, in the oversampled domain, so the curve
-                // sees a genuinely offset signal rather than an offset already
-                // band-limited away.
-                for index in 0..frames {
-                    self.driven[index] = self.dry[index] * gain + bias;
-                }
+                // The bias joins the drive here, in the oversampled domain, so
+                // the curve sees a genuinely offset signal rather than an offset
+                // already band-limited away. The loop is the SIMD kernel's
+                // affine form: `driven = dry * gain + bias`.
+                crate::effects::util::simd::affine_in_place(
+                    &mut self.driven[..frames],
+                    &self.dry[..frames],
+                    gain,
+                    bias,
+                );
                 let nonlinearity = |x: f32| shape.shape(x);
                 let written = if self.oversamplers[channel].is_prepared() && scratch_len > 0 {
                     let scratch = &mut self.scratch[..scratch_len];
@@ -496,9 +510,7 @@ impl EffectProcessor for Saturation {
                         self.wet_buf[index] = nonlinearity(self.driven[index]);
                     }
                 }
-                for sample in self.wet_buf[..frames].iter_mut() {
-                    *sample *= comp * trim;
-                }
+                crate::effects::util::simd::scale_in_place(&mut self.wet_buf[..frames], comp * trim);
             } else {
                 // 0 dB drive with no bias is the identity: skip the shaper
                 // entirely, which is also what keeps the reported latency at 0.
@@ -534,8 +546,19 @@ impl EffectProcessor for Saturation {
             if let Some(destination) = buffer.channel_mut(channel) {
                 for (index, out) in destination.iter_mut().enumerate() {
                     let wet_sample = self.wet_buf.get(index).copied().unwrap_or(0.0);
-                    let dry_sample = self.dry.get(index).copied().unwrap_or(0.0);
-                    *out = wet_sample * wet + dry_sample * (1.0 - wet);
+                    // `NaN * 0.0` is `NaN`, so folding a non-finite input
+                    // through a fully wet mix would poison an output the shaper
+                    // had already sanitised. The dry term is therefore only
+                    // consulted when the mix actually wants it, exactly as the
+                    // bit crusher does.
+                    *out = if wet >= 1.0 {
+                        wet_sample
+                    } else if wet <= 0.0 {
+                        self.dry.get(index).copied().unwrap_or(0.0)
+                    } else {
+                        let dry_sample = self.dry.get(index).copied().unwrap_or(0.0);
+                        wet_sample * wet + dry_sample * (1.0 - wet)
+                    };
                 }
             }
         }
@@ -1545,12 +1568,35 @@ mod tests {
     #[test]
     fn stereo_channels_do_not_leak_into_each_other() {
         // Per-channel DC blockers and oversamplers: a driven left with a silent
-        // right must leave the right silent.
+        // right must leave the right exactly as it would be on its own.
+        //
+        // The reference is a run with *both* channels silent rather than zero
+        // output. A bias legitimately generates output from a silent channel -
+        // that is what a bias is, and why the effect runs a DC blocker - so
+        // asserting the right is silent would only be asserting the bias away.
+        // What matters is that the right does not depend on the left: crosstalk
+        // is the right *differing* from its own solo behaviour, not the right
+        // being nonzero.
+        let chunk = 256;
+        let reference = {
+            let mut effect = make();
+            effect.set_parameter(PARAM_DRIVE, 24.0);
+            effect.set_parameter(PARAM_BIAS, 50.0);
+            effect.set_wet(1.0);
+            let mut left = alloc::vec![0.0_f32; chunk];
+            let mut right = alloc::vec![0.0_f32; chunk];
+            {
+                let mut views = [&mut left[..], &mut right[..]];
+                let mut buffer = AudioBuffer::new(&mut views);
+                effect.process(&mut buffer, &RenderContext::new(SR, chunk, 0, 120.0, 960));
+            }
+            right
+        };
+
         let mut effect = make();
         effect.set_parameter(PARAM_DRIVE, 24.0);
         effect.set_parameter(PARAM_BIAS, 50.0);
         effect.set_wet(1.0);
-        let chunk = 256;
         let mut left = alloc::vec![0.6_f32; chunk];
         let mut right = alloc::vec![0.0_f32; chunk];
         {
@@ -1558,12 +1604,17 @@ mod tests {
             let mut buffer = AudioBuffer::new(&mut views);
             effect.process(&mut buffer, &RenderContext::new(SR, chunk, 0, 120.0, 960));
         }
-        for (i, sample) in right.iter().enumerate() {
+        for (i, (got, want)) in right.iter().zip(reference.iter()).enumerate() {
             assert!(
-                sample.abs() < 1e-6,
-                "the silent right channel picked up {sample} at sample {i}"
+                (got - want).abs() < 1e-6,
+                "the driven left channel leaked into the silent right at sample {i}: \
+                 {got} vs the solo {want}"
             );
         }
+        assert!(
+            left.iter().any(|sample| sample.abs() > 0.1),
+            "the left channel was never actually driven"
+        );
     }
 
     #[test]

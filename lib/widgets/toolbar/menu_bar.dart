@@ -6,8 +6,12 @@ import '../../core/utils/theme_colors.dart';
 import '../../core/instrument_picker.dart';
 import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
+import '../../providers/ab_compare_provider.dart';
 import '../editor/synth_editor_dialog.dart' show SynthEditorLauncher;
+import '../editor/arrangement_view.dart';
 import '../../services/file_service.dart';
+import '../../services/midi/smf_types.dart';
+import '../dialogs/project_migration_dialog.dart';
 import '../../services/audio_converter.dart';
 import '../../screens/settings_page.dart';
 import '../../screens/about_dialog.dart' as app;
@@ -53,7 +57,10 @@ class AudioMenuBar extends ConsumerWidget {
                 shortcut: 'shortcut.openProject'.tr(),
                 onTap: () async {
                   final notifier = ref.read(projectProvider.notifier);
-                  await notifier.openProject();
+                  await notifier.openProject(
+                    confirmMigration: (probe) =>
+                        confirmProjectMigration(context, probe),
+                  );
                 },
               ),
               MenuItem(
@@ -147,7 +154,37 @@ class AudioMenuBar extends ConsumerWidget {
                 label: 'menu.track.importMidi'.tr(),
                 shortcut: 'shortcut.importMidi'.tr(),
                 onTap: () async {
-                  AppLogger.i('MIDI import not yet implemented');
+                  try {
+                    final added =
+                        await ref.read(projectProvider.notifier).importMidiFile();
+                    if (!context.mounted || added == null) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          added == 0
+                              ? 'menu.track.importMidiEmpty'.tr()
+                              : 'menu.track.importMidiDone'
+                                  .tr(namedArgs: {'n': '$added'}),
+                        ),
+                      ),
+                    );
+                  } on SmfFormatException catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('menu.track.importMidiFailed'.tr(namedArgs: {'reason': e.message}))),
+                    );
+                  }
+                },
+              ),
+              MenuItem(
+                label: 'menu.track.exportMidi'.tr(),
+                onTap: () async {
+                  final path =
+                      await ref.read(projectProvider.notifier).exportMidiFile();
+                  if (!context.mounted || path == null) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('menu.track.exportMidiDone'.tr())),
+                  );
                 },
               ),
               const MenuItem.separator(),
@@ -215,6 +252,18 @@ class AudioMenuBar extends ConsumerWidget {
                 },
               ),
               MenuItem(label: 'menu.view.fitWindow'.tr()),
+              const MenuItem.separator(),
+              MenuItem(
+                label: 'menu.view.arrangement'.tr(),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ArrangementView()),
+                ),
+              ),
+              MenuItem(
+                label: 'menu.view.abCompare'.tr(),
+                shortcut: 'Shift+Tab',
+                onTap: () => ref.read(abCompareProvider.notifier).arm(),
+              ),
             ],
           ),
           _MenuButton(

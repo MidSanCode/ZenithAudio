@@ -11,8 +11,19 @@ mixin _ProjectHistoryMixin on Notifier<Project> {
   final List<Project> _undoStack = [];
   final List<Project> _redoStack = [];
 
+  /// Whether there are unsaved changes.
+  ///
+  /// Declared here rather than in the class body so sibling mixins bound with
+  /// `on _ProjectHistoryMixin` can read and set it; Dart privacy is per-library
+  /// but a mixin's `this` is its `on` type, so a class-body private would not
+  /// be in scope for them.
+  bool _isDirty = false;
+
   bool get canUndo => _undoStack.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
+
+  /// Marks the project dirty.
+  void _markDirty() => _isDirty = true;
 
   /// A snapshot clone. Notes and step patterns are copied so later in-place
   /// mutation cannot corrupt a stored snapshot.
@@ -36,6 +47,7 @@ mixin _ProjectHistoryMixin on Notifier<Project> {
       playbackSpeed: p.playbackSpeed,
       patterns: p.patterns,
       playlist: p.playlist,
+      pluginSlots: p.pluginSlots,
     );
   }
 

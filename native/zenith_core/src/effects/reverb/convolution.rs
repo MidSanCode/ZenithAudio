@@ -371,7 +371,11 @@ impl Fft {
 }
 
 /// One channel's partitioned convolution engine.
-#[derive(Debug)]
+///
+/// `Default` is derived: every field's default is its neutral value, and
+/// `Biquad::default` is already the passthrough section the hand-written impl
+/// used to spell out.
+#[derive(Debug, Default)]
 struct Convolver {
     /// The IR's per-partition spectra, partition-major: partition `p` occupies
     /// `[p * FFT_SIZE, (p + 1) * FFT_SIZE)`.
@@ -395,23 +399,6 @@ struct Convolver {
     low_pass: Biquad,
     /// Wet-path high-pass.
     high_pass: Biquad,
-}
-
-impl Default for Convolver {
-    fn default() -> Self {
-        Self {
-            ir_re: alloc::vec::Vec::new(),
-            ir_im: alloc::vec::Vec::new(),
-            partitions: 0,
-            history_re: alloc::vec::Vec::new(),
-            history_im: alloc::vec::Vec::new(),
-            history_cursor: 0,
-            accum_re: alloc::vec::Vec::new(),
-            accum_im: alloc::vec::Vec::new(),
-            low_pass: Biquad::passthrough(),
-            high_pass: Biquad::passthrough(),
-        }
-    }
 }
 
 impl Convolver {
@@ -771,14 +758,21 @@ impl ConvolutionReverb {
                 let history_slot = (convolver.history_cursor + capacity - back) % capacity;
                 let h = history_slot * FFT_SIZE..(history_slot + 1) * FFT_SIZE;
                 let k = partition * FFT_SIZE..(partition + 1) * FFT_SIZE;
-                for bin in 0..FFT_SIZE {
-                    let hr = convolver.history_re[h.start + bin];
-                    let hi = convolver.history_im[h.start + bin];
-                    let irr = convolver.ir_re[k.start + bin];
-                    let iri = convolver.ir_im[k.start + bin];
-                    convolver.accum_re[bin] += hr * irr - hi * iri;
-                    convolver.accum_im[bin] += hr * iri + hi * irr;
-                }
+                // The single hottest loop in the suite: the complex
+                // multiply-accumulate is handed to the SIMD kernel, which is
+                // NEON on `aarch64`, `simd128` on wasm32, and a scalar loop
+                // everywhere else. The two slices on each side are equal length,
+                // and the accumulator is the full spectrum - longer than the
+                // partition - which the kernel handles by acting on the source
+                // length only.
+                crate::effects::util::simd::complex_mac(
+                    &mut convolver.accum_re,
+                    &mut convolver.accum_im,
+                    &convolver.history_re[h.clone()],
+                    &convolver.history_im[h],
+                    &convolver.ir_re[k.clone()],
+                    &convolver.ir_im[k],
+                );
             }
         }
 
@@ -801,8 +795,7 @@ impl ConvolutionReverb {
             // window's own layout, and adding a separately saved tail as well
             // would count it twice (that double count is what made the output at
             // each block boundary come out at roughly twice its true value).
-            for index in 0..frames {
-                let value = re[index];
+            for (index, &value) in re.iter().enumerate().take(frames) {
                 self.output[channel][index] = if value.is_finite() { value } else { 0.0 };
             }
             convolver.history_cursor = (convolver.history_cursor + 1) % capacity;

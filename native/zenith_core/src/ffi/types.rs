@@ -815,6 +815,203 @@ impl From<crate::mixer::MeterSnapshot> for ZenithMeterSnapshot {
     }
 }
 
+// ── S1 engine & transport ──
+//
+// Owned by Agent-A. Per `docs/COORDINATION.md` C-013, this section is additive:
+// it touches no existing line above. These mirrors are declared in
+// `docs/ABI.md` §5.2 (config), §3.5 (musical time) and §6.3 (status) and have
+// hand-written twins in `lib/engine/ffi/native_types.dart`.
+
+use core::mem::size_of;
+
+/// A musical position in ticks (ABI §3.5).
+///
+/// `ticks` is `int64` to match the tick-first model; `ppq` is carried
+/// redundantly so the Rust side can validate it independently, and `_reserved`
+/// keeps the struct at a multiple of 8 bytes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ZenithMusicalTime {
+    /// Absolute position, in ticks (PPQ = 960, PLAN §3.S0).
+    pub ticks: i64,
+    /// Pulses per quarter note, for independent validation.
+    pub ppq: u32,
+    /// Explicit padding, held at zero.
+    pub _reserved: u32,
+}
+
+/// Engine creation parameters (ABI §5.2).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ZenithEngineConfig {
+    /// Target sample rate, e.g. 48000.
+    pub sample_rate: u32,
+    /// Frames per block, 64..2048 (PLAN §3.S1 item 4).
+    pub block_size: u32,
+    /// Preallocated mixer channels (PLAN §3.S3).
+    pub max_channels: u32,
+    /// Preallocated tracks.
+    pub max_tracks: u32,
+    /// [`zenith_driver_kind`] discriminant.
+    pub driver_kind: u32,
+    /// [`zenith_engine_flags`] bitset.
+    pub flags: u32,
+    /// The major version the caller expects, for a pre-create check.
+    pub abi_major: u32,
+    /// Explicit padding, held at zero.
+    pub _reserved: u32,
+}
+
+/// Driver kind discriminants, mirrored from `ZenithDriverKind` (ABI §5.2).
+pub mod zenith_driver_kind {
+    /// Platform default: `cpal` or `worklet`.
+    pub const AUTO: u32 = 0;
+    /// Desktop/mobile device via `cpal`; unsupported on `wasm32`.
+    pub const CPAL: u32 = 1;
+    /// Driven by the web `AudioWorklet`.
+    pub const WORKLET: u32 = 2;
+    /// Offline rendering, no device (PLAN §3.S4).
+    pub const OFFLINE: u32 = 3;
+}
+
+/// Engine flag bits (ABI §5.2).
+pub mod zenith_engine_flags {
+    /// Real-time safety assertions on (debug/test builds only).
+    pub const STRICT_REALTIME: u32 = 0x01;
+    /// Allow the web degradation strategy to intervene.
+    pub const WEB_DEGRADE: u32 = 0x02;
+    /// Offline rendering uses the large-buffer fast path.
+    pub const OFFLINE_FAST: u32 = 0x04;
+}
+
+/// Engine status snapshot (ABI §6.3).
+///
+/// Ordering is largest-first to avoid implicit padding. The playhead is `i64`
+/// and every other scalar is `u32`/`f32`; Dart takes the runtime size, since the
+/// layout is target-independent but the values are not.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ZenithEngineStatus {
+    /// Playhead position, in frames.
+    pub playhead_frames: i64,
+    /// Tempo, in beats per minute.
+    pub bpm: f64,
+    /// Real-time load, `0.0..1.0`.
+    pub cpu_load: f32,
+    /// Buffer underruns accumulated.
+    pub xrun_count: u32,
+    /// Voices currently sounding.
+    pub active_voices: u32,
+    /// Voice pool size.
+    pub max_voices: u32,
+    /// Web degradation tier: 0, 1 or 2.
+    pub degrade_level: u32,
+    /// `0` stopped, `1` playing, `2` paused.
+    pub state: u32,
+    /// Driver kind in use.
+    pub driver_kind: u32,
+    /// Negotiated sample rate.
+    pub sample_rate: u32,
+    /// Block size.
+    pub block_size: u32,
+    /// Explicit padding, held at zero.
+    pub _reserved: u32,
+}
+
+// SAFETY: the struct is plain data (no pointers, no interior mutability), so it
+// is freely shareable across the control thread and the audio thread.
+unsafe impl Send for ZenithEngineStatus {}
+// SAFETY: as above.
+unsafe impl Sync for ZenithEngineStatus {}
+
+impl From<crate::engine::EngineStatus> for ZenithEngineStatus {
+    fn from(status: crate::engine::EngineStatus) -> Self {
+        Self {
+            playhead_frames: status.playhead_frames,
+            bpm: status.bpm as f64,
+            cpu_load: status.cpu_load,
+            xrun_count: status.xrun_count,
+            active_voices: status.active_voices,
+            max_voices: status.max_voices,
+            degrade_level: status.degrade_level,
+            state: status.state,
+            driver_kind: status.driver_kind,
+            sample_rate: status.sample_rate,
+            block_size: status.block_size,
+            _reserved: 0,
+        }
+    }
+}
+
+impl From<crate::engine::EngineConfig> for ZenithEngineConfig {
+    fn from(config: crate::engine::EngineConfig) -> Self {
+        Self {
+            sample_rate: config.sample_rate,
+            block_size: config.block_size,
+            max_channels: config.max_channels,
+            max_tracks: config.max_tracks,
+            driver_kind: config.driver_kind,
+            flags: config.flags,
+            abi_major: 0,
+            _reserved: 0,
+        }
+    }
+}
+
+impl From<ZenithEngineConfig> for crate::engine::EngineConfig {
+    fn from(config: ZenithEngineConfig) -> Self {
+        Self {
+            sample_rate: config.sample_rate,
+            block_size: config.block_size,
+            max_channels: config.max_channels,
+            max_tracks: config.max_tracks,
+            driver_kind: config.driver_kind,
+            flags: config.flags,
+        }
+    }
+}
+
+/// Returns the size of [`ZenithEngineConfig`] as Rust laid it out.
+///
+/// # Safety
+///
+/// No preconditions; the function reads no memory.
+#[no_mangle]
+pub extern "C" fn zenith_sizeof_engine_config() -> usize {
+    size_of::<ZenithEngineConfig>()
+}
+
+/// Returns the size of [`ZenithEngineStatus`] as Rust laid it out.
+///
+/// # Safety
+///
+/// No preconditions; the function reads no memory.
+#[no_mangle]
+pub extern "C" fn zenith_sizeof_engine_status() -> usize {
+    size_of::<ZenithEngineStatus>()
+}
+
+/// Returns the size of [`ZenithMusicalTime`] as Rust laid it out.
+///
+/// # Safety
+///
+/// No preconditions; the function reads no memory.
+#[no_mangle]
+pub extern "C" fn zenith_sizeof_musical_time() -> usize {
+    size_of::<ZenithMusicalTime>()
+}
+
+/// Returns the size of the (opaque) engine handle. Zero, because Dart must
+/// never interpret the engine's memory (ABI principle P2).
+///
+/// # Safety
+///
+/// No preconditions; the function reads no memory.
+#[no_mangle]
+pub extern "C" fn zenith_sizeof_engine() -> usize {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1097,5 +1294,92 @@ mod tests {
         assert_eq!(mirrored.rms_r, 4.0);
         assert_eq!(mirrored.peak_hold_l, 5.0);
         assert_eq!(mirrored.peak_hold_r, 6.0);
+    }
+
+    // ── S1 engine layout assertions ──
+    //
+    // These mirror `lib/engine/ffi/native_types.dart`; a failure here means
+    // both sides must change in the same commit (ABI §9.2).
+
+    #[test]
+    fn engine_config_is_eight_words() {
+        // 8 × u32 = 32, with no pointer or 64-bit field to shift alignment.
+        assert_eq!(size_of::<ZenithEngineConfig>(), 32);
+    }
+
+    #[test]
+    fn musical_time_is_two_words() {
+        // i64 + u32 + u32 = 16, no implicit padding after the 8-byte field.
+        assert_eq!(size_of::<ZenithMusicalTime>(), 16);
+    }
+
+    #[test]
+    fn engine_status_layout_is_pinned() {
+        // i64 + f64 + f32 + 9 × u32 = 8 + 8 + 4 + 36 = 56; alignment 8 holds.
+        assert_eq!(size_of::<ZenithEngineStatus>(), 56);
+        assert_eq!(size_of::<ZenithEngineStatus>() % 8, 0, "no padding");
+    }
+
+    #[test]
+    fn the_s1_size_helpers_agree_with_the_types() {
+        assert_eq!(
+            zenith_sizeof_engine_config(),
+            size_of::<ZenithEngineConfig>()
+        );
+        assert_eq!(
+            zenith_sizeof_engine_status(),
+            size_of::<ZenithEngineStatus>()
+        );
+        assert_eq!(
+            zenith_sizeof_musical_time(),
+            size_of::<ZenithMusicalTime>()
+        );
+        assert_eq!(zenith_sizeof_engine(), 0, "the handle is opaque to Dart");
+    }
+
+    #[test]
+    fn engine_status_round_trips_through_the_mirror() {
+        let internal = crate::engine::EngineStatus {
+            playhead_frames: 12_345,
+            bpm: 128.0,
+            cpu_load: 0.25,
+            xrun_count: 2,
+            active_voices: 7,
+            max_voices: 64,
+            degrade_level: 1,
+            state: 1,
+            driver_kind: 3,
+            sample_rate: 48_000,
+            block_size: 256,
+        };
+        let mirrored: ZenithEngineStatus = internal.into();
+        assert_eq!(mirrored.playhead_frames, 12_345);
+        assert_eq!(mirrored.bpm, 128.0);
+        assert_eq!(mirrored.sample_rate, 48_000);
+        assert_eq!(mirrored._reserved, 0);
+    }
+
+    #[test]
+    fn config_round_trips_through_the_mirror() {
+        let internal = crate::engine::EngineConfig {
+            sample_rate: 44_100,
+            block_size: 128,
+            max_channels: 32,
+            max_tracks: 96,
+            driver_kind: 3,
+            flags: 0,
+        };
+        let mirrored: ZenithEngineConfig = internal.into();
+        let back: crate::engine::EngineConfig = mirrored.into();
+        assert_eq!(back, internal);
+    }
+
+    #[test]
+    fn driver_kind_and_flag_constants_are_stable() {
+        assert_eq!(zenith_driver_kind::AUTO, 0);
+        assert_eq!(zenith_driver_kind::OFFLINE, 3);
+        assert_eq!(zenith_engine_flags::STRICT_REALTIME, 0x01);
+        assert_eq!(zenith_engine_flags::WEB_DEGRADE, 0x02);
+        assert_eq!(zenith_engine_flags::OFFLINE_FAST, 0x04);
     }
 }

@@ -221,8 +221,13 @@ class AudioService {
   /// Web stub: hot-swap during playback is unsupported.
   Future<void> hotSwapTrackWav(Track track) async {}
 
-  void dispose() {
-    unloadAll();
+  /// Releases the audio pipeline.
+  ///
+  /// `Future<void>` to match the desktop service, so `AudioServiceAdapter` —
+  /// shared by both platforms — can return it from `disposeService` without a
+  /// web-only type error.
+  Future<void> dispose() async {
+    await unloadAll();
   }
 }
 

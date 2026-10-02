@@ -6,9 +6,12 @@
 //!   §3.S5 forbids each effect rolling its own, because two half-band filters
 //!   that disagree produce two different amounts of aliasing for the same
 //!   nominal "4x" setting.
+//! * [`simd`] — cfg-dispatched vector kernels for the hot loops the plan names
+//!   (EQ, convolution, saturation). Scalar fallback everywhere else.
 
 pub mod dsp;
 pub mod oversampling;
+pub mod simd;
 
 pub use dsp::{
     clamp_frequency, cos_poly, db_to_gain, exp2, gain_to_db, log10, log2, one_pole_coeff, powf,

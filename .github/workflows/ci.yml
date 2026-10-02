@@ -1,0 +1,127 @@
+# CI 守卫，对应 docs/PLAN_DAW_PARITY.md §4.2 与 §8.3。
+#
+# build.yml 只在手动触发时打包各平台产物，不跑测试也不装 Rust；本文件补上每次
+# 推送/PR 都执行的合并前门禁。两文件职责分离：build.yml 出产物，ci.yml 拦回归。
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# 同一分支的新推送取消旧的运行，避免 CI 排队。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 不引入第三方 DAW 品牌名（§0.2 硬约束） ──
+  #
+  # 单独成一个 job，因为它最快、最常被违反，且失败信息需要直接指出命中位置。
+  brand-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on any competitor DAW brand name
+        run: |
+          set -e
+          # 只列不会与普通英文单词撞车的品牌名。刻意**不**包含 "reason" 与
+          # "reaper"：两者都是常见英文词（源码注释里大量出现 reason），用它们做
+          # 守卫会让 CI 长期假红，反而使守卫失去意义。这两个品牌由人工评审覆盖。
+          PATTERN='ableton|bitwig|cubase|fl[ _-]?studio|garageband|logic[ _-]?pro|presonus|pro[ _-]?tools|studio[ _-]?one'
+          HITS=$(grep -rInE --exclude-dir=build --exclude-dir=.dart_tool \
+                   --exclude-dir=target --exclude='*.lock' \
+                   --exclude='ci.yml' -i "$PATTERN" . || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::禁止出现第三方 DAW 品牌名（docs/PLAN_DAW_PARITY.md §0.2）"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No competitor brand names found."
+
+  # ── Dart / Flutter 门禁 ──
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Analyze (must be zero errors)
+        # The gate is "zero errors", not "zero lints": the repo carries a known
+        # baseline of info/warning lints. `flutter analyze` defaults to treating
+        # both as fatal, which failed CI on the baseline rather than on the
+        # change. Errors still fail.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Test
+        run: flutter test --reporter expanded
+
+  # ── Web 构建门禁 ──
+  #
+  # web 目标曾长期无法编译（条件导入、接口分歧），而 `flutter analyze` 不会发现
+  # 平台解析后的类型错误。这一步保证 web 至少能构建出产物——是 S1.5「Web 可用」的
+  # 最低保障（实时播放还需 worklet/WASM 流水线）。
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Build for the web
+        run: flutter build web --release
+
+  # ── Rust 门禁 ──
+  #
+  # 覆盖 §8.3 要求的四步：clippy（零 warning）、test、以及作为 Web 端唯一自动化
+  # 保障的 `cargo check --target wasm32-unknown-unknown`。
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/zenith_core
+      - name: Clippy (warnings are errors)
+        run: cargo clippy -p zenith_core --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test -p zenith_core --locked
+      # ABI 原则 P7 的硬门禁：核心必须可编译到 wasm32。
+      # 违反它等于放弃 Web 端，所以这一步与测试同级。
+      - name: WASM target must compile (P7)
+        run: cargo check -p zenith_core --locked --target wasm32-unknown-unknown
+
+  # ── FFI 冒烟：构建 dylib 并跑 native_ffi_smoke_test ──
+  #
+  # 这个 job 单列，因为它要先 `cargo build` 出动态库再让 Dart 测试能加载它；
+  # 其余 Dart 测试在缺库时会 skip，只有这里真正验证「Dart 能调用 Rust」。
+  ffi-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/zenith_core
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Build the native core
+        run: cargo build -p zenith_core --locked
+      - name: Stage the shared library where the loader looks for it
+        run: cp target/debug/libzenith_core.so libzenith_core.so
+      - name: FFI smoke test
+        run: flutter test test/native_ffi_smoke_test.dart --reporter expanded

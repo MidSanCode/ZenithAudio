@@ -40,6 +40,42 @@ pub mod automation;
 /// its `ffi/` surface.
 pub mod effects;
 
+/// Shared DSP primitives for the engine and voice layers (PLAN §3.S1 `dsp/`).
+///
+/// Deliberately independent of [`effects`]: these are the small, allocation-free
+/// building blocks (biquad, state-variable filter, FFT, resampler) the engine
+/// and its voices compose.
+pub mod dsp;
+
+/// Offline audio-editing algorithms (PLAN §3.S8): time stretch, pitch shift,
+/// transient detection and crossfading.
+///
+/// Buffer-in/buffer-out transforms the audio editor calls; **not** on the audio
+/// path, so they may allocate. See `docs/COORDINATION.md` C-015 for the
+/// registration of this module.
+pub mod edit;
+
+/// The real-time audio engine (PLAN §3.S1).
+///
+/// Composes [`transport`], [`voice`], [`mixer`] and [`automation`] into the
+/// object a driver pulls audio from. See `docs/COORDINATION.md` C-013 for the
+/// registration of this module, [`driver`], [`transport`], [`dsp`] and
+/// [`voice`], plus the S1 engine ABI surface.
+pub mod engine;
+
+/// Audio drivers: the injectable source of the audio callback (PLAN §3.S1).
+///
+/// The default build ships only the offline driver; the `cpal` device driver is
+/// behind an optional feature so the core builds and tests with no audio
+/// hardware and no external crate.
+pub mod driver;
+
+/// Transport: playhead, tempo, loop, sequencing and the lock-free event queue.
+pub mod transport;
+
+/// Instrument voices: the synthesizer, the sampler and the voice pool.
+pub mod voice;
+
 /// The C ABI surface: every `#[no_mangle] extern "C"` symbol lives under here,
 /// so the exported set is auditable by reading one directory (ABI principle P1).
 pub mod ffi;
@@ -57,7 +93,7 @@ pub mod mixer;
 /// so a stale `zenith_core.dll` fails loudly at startup instead of producing
 /// silent audio corruption.
 ///
-/// # Why this is 0.4.0 and not 0.1.x
+/// # Why this is 0.7.0 and not 0.1.x
 ///
 /// Each stage that published new symbols bumped the minor, on the same
 /// additive basis (`docs/ABI.md` §2.2): *adding* exported functions and
@@ -74,7 +110,16 @@ pub mod mixer;
 ///   Registered as C-011. This is what lets Dart generate an effect panel from
 ///   descriptors instead of hand-writing a class per effect (PLAN §3.S5), and
 ///   it pays the `zenith_effect_describe_params` debt recorded in §6.4.
-pub const ABI_VERSION: u32 = encode_version(0, 4, 0);
+/// * `0.5.0` — S1: the real-time engine and transport surface
+///   (`ffi/engine_api.rs`, the `ZenithMusicalTime` / `ZenithEngineConfig` /
+///   `ZenithEngineStatus` structs). Registered as C-013.
+/// * `0.6.0` — S4: offline rendering and PDC (`ffi/render_api.rs`:
+///   `zenith_render_offline` / `zenith_buffer_free` / `zenith_engine_pdc_latency`).
+///   Registered as C-014.
+/// * `0.7.0` — S8: the offline audio-edit surface (`ffi/edit_api.rs`:
+///   `zenith_time_stretch` / `zenith_pitch_shift` / `zenith_detect_transients` /
+///   `zenith_crossfade`). Registered as C-016.
+pub const ABI_VERSION: u32 = encode_version(0, 7, 0);
 
 /// Status code returned by every fallible entry point.
 ///
@@ -209,7 +254,7 @@ pub extern "C" fn zenith_version_string() -> *const c_char {
     //
     // This must be kept in step with `ABI_VERSION`; a test asserts the two
     // agree, because a stale string is how "rebuilt but old library" hides.
-    concat!("0.4.0", "\0").as_ptr() as *const c_char
+    concat!("0.7.0", "\0").as_ptr() as *const c_char
 }
 
 /// Panics on purpose to prove the panic firewall works.
@@ -260,7 +305,7 @@ mod tests {
     fn version_string_round_trips_through_c_str() {
         // SAFETY: the function returns a 'static NUL-terminated literal.
         let s = unsafe { CStr::from_ptr(zenith_version_string()) };
-        assert_eq!(s.to_str().unwrap(), "0.4.0");
+        assert_eq!(s.to_str().unwrap(), "0.7.0");
     }
 
     #[test]
@@ -268,9 +313,9 @@ mod tests {
         // Pinned deliberately: a version bump must be a conscious edit here so
         // that adding ABI surface cannot silently ship under the old stamp.
         // 0.1.0 = S0/S1 skeleton, 0.2.0 = S2 parameters, 0.3.0 = S3 mixer,
-        // 0.4.0 = S5 effect query surface.
+        // 0.4.0 = S5 effect query, 0.5.0 = S1 engine, 0.6.0 = S4 offline, 0.7.0 = S8 edit.
         assert_eq!(ABI_VERSION >> 16, 0, "major");
-        assert_eq!((ABI_VERSION >> 8) & 0xFF, 4, "minor");
+        assert_eq!((ABI_VERSION >> 8) & 0xFF, 7, "minor");
         assert_eq!(ABI_VERSION & 0xFF, 0, "patch");
     }
 
