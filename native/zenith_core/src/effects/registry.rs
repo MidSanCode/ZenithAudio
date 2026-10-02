@@ -86,9 +86,13 @@ pub struct EffectEntry {
 }
 
 /// Whether `kind` belongs to the built-in range.
+///
+/// `KIND_BUILTIN_BASE` is zero, so `kind >= KIND_BUILTIN_BASE` is trivially
+/// true and only the upper bound can reject anything. It is written as a single
+/// comparison rather than a redundant `>=` the compiler rejects as absurd.
 #[must_use]
 pub const fn is_builtin_kind(kind: u32) -> bool {
-    kind >= KIND_BUILTIN_BASE && kind <= KIND_BUILTIN_END
+    kind <= KIND_BUILTIN_END
 }
 
 /// The complete built-in registry, in kind-id order.
@@ -291,7 +295,9 @@ mod tests {
     #[test]
     fn the_plugin_range_never_overlaps_the_builtin_range() {
         // ABI §11 Q2; a slot holding a plugin must not resolve to a built-in.
-        assert!(KIND_BUILTIN_END < KIND_PLUGIN_BASE);
+        // Compile-time constants, so the relation is checked at compile time
+        // rather than re-proved in a test the compiler can fold away.
+        const { assert!(KIND_BUILTIN_END < KIND_PLUGIN_BASE) };
         assert!(is_builtin_kind(KIND_BUILTIN_END));
         assert!(!is_builtin_kind(KIND_PLUGIN_BASE));
         assert!(!is_builtin_kind(KIND_PLUGIN_BASE + 0xFFFF));

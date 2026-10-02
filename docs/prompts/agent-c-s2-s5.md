@@ -1,91 +1,64 @@
-# 启动提示词 · Agent-C（S2 参数/自动化 + S5 效果器套件）
+# 启动提示词 · Agent-C（S5 收尾：修 8 个红测 + 清 clippy + SIMD 决策 + 收尾文档）
 
 把下面整段复制给该会话作为第一条消息。
 
 ---
 
-你是 Agent-C，负责「卓声」DAW 项目的 S2（参数系统与自动化）与 S5（内置效果器套件）。
+你是 Agent-C，负责「卓声」DAW 项目的 **S5 收尾**。S2（自动化）已由你此前的会话完成；
+S5 主体（效果器树 + ABI 导出面）也已落地，**剩 8 个红测和若干收尾项**。
 
 工作目录：`F:\exeliang\zenith_audio`
 
-**必读**
-1. `docs/PLAN_DAW_PARITY.md` — §0.2 约束、§0.3 选型、§3 的 S2 与 S5 全节
-2. `docs/ABI.md` — C ABI 契约（尤其 P5 实时安全、P8 结构体镜像）
-3. `lib/automation/parameter.dart` — S0 已定义的 Dart 侧接口
-4. `native/zenith_core/src/lib.rs`
+**必读（按顺序）**
+1. `docs/stages/s5-handoff.md` — **★ 这是你的任务书**，8 个红测的逐条诊断、
+   环境的两个坑、门禁要求全在里面，本文只做摘要
+2. `docs/PLAN_DAW_PARITY.md` — §0.2 约束、§3 S5 全节（SIMD 是硬性要求）
+3. `docs/ABI.md` §6.5b — S5 导出面契约
+4. `docs/COORDINATION.md` C-011 — 你此前的登记，全绿后要改 🟢
 
-## S2 可以先开工
+**当前实测状态（2026-10-04 复核）**
 
-它主要新增 `native/zenith_core/src/automation/` 目录，与 Agent-A 的 S1 冲突面小。
+| 门禁 | 状态 |
+|---|---|
+| `cargo test` | ⚠️ **852 passed / 8 failed**（8 个全在 `distortion`） |
+| `cargo clippy --all-targets -- -D warnings` | ❌ **8 项 error**（含兄弟文件） |
+| `cargo check --target wasm32-unknown-unknown` | ✅ 通过 |
+| SIMD（PLAN §3.S5 硬性要求） | ❌ 未做，需实现或书面记为已知缺口 |
+| `docs/stages/s5-report.md` | ❌ 不存在，需新建 |
 
-但注意：S2 的实时求值需要 S1 的 DSP 图与无锁参数通道。若 S1 未就绪，**先做纯逻辑部分**
-（参数注册表、自动化片段数据结构、插值、曲线、录制状态机）并配足单元测试，
-求值接线等 S1 落地后再补。
+## 任务
 
-### 任务 S2（按 `PLAN` §3 S2）
+按 `s5-handoff.md` 的诊断与建议顺序执行：
 
-- **Rust 侧** `native/zenith_core/src/automation/`：`parameter` / `store` / `clip` /
-  `lane` / `player` / `modulator` / `recorder`
-- **Dart 侧** `lib/automation/`：`ParameterId` 镜像、自动化片段的编辑 UI
-  （绘制、拖拽、曲线张力）、录制模式开关与状态显示
-- **寻址**：Dart 构造 `channel/<id>/volume` 形式，传入 Rust 时映射为紧凑三元组
-  `(kind: u16, index: u32, sub: u32)`，**热路径不做字符串哈希**
-- **求值顺序固定**：基础值 → 自动化 → 调制器累加 → 钳制（顺序必须文档化）
-- 所有参数变更经一阶低通（可配 1–50ms）避免 zipper noise
-- **录制模式三种**：Touch / Latch / Write
-- 点间插值支持 线性 / 保持 / 曲线（张力 -1..1）
-- 求值路径零分配；自动化点加载时预排序并建索引
-
-## S5 ⚠️ 开工前必须先扩 ABI
-
-S0 刻意没有建 Dart 侧效果器抽象（**这是正确决定**），代价是：Dart 要「自动生成效果器 UI」，
-必须能从 Rust 查询参数描述符清单——而 `docs/ABI.md` 目前只有 3 个版本函数。
-
-所以 **S5 第一步是先设计并登记 ABI 扩展**，例如：
-```c
-uint32_t zenith_effect_count(void);
-const ParamDesc* zenith_effect_describe(uint32_t idx);
-```
-按 `ABI.md` §2.2 的兼容规则递增 minor，同步更新 `docs/ABI.md` 与 Dart 侧绑定。
-
-### 任务 S5（按 `PLAN` §3 S5）
-
-- **Rust 侧** `native/zenith_core/src/effects/`：
-  `registry` + `eq`(parametric, spectrum) + `dynamics`(compressor/limiter/gate) +
-  `reverb`(algorithmic/convolution) + `delay`(sync_delay) +
-  `modulation`(chorus/flanger/phaser) + `distortion`(saturation/bitcrush) +
-  `filter`(multimode) + `util`(oversampling)
-- 统一 trait `EffectProcessor`：`prepare` / `process` / `reset` / `latency_samples` /
-  `parameters` / `set_parameter`
-- 每个效果在 `prepare` 阶段一次性预分配所有缓冲（含 IR 与 FFT 暂存），
-  `process` 内**零分配**；用 `assert_no_alloc` 验证
-- 每个效果配 Rust 单元测试（脉冲 / 白噪声 / 正弦输入）
-- 热点（EQ、卷积、饱和）用 SIMD，`cfg` 分平台，`wasm32` 用 `simd128`
-- **过采样统一走 `util/oversampling.rs`**，不许各效果各写一套
-- `latency_samples()` 必须准确，供 S4 的 PDC 使用
-- Dart 侧：参数清单由 Rust 经 FFI 查询得到，**UI 自动生成**，无需为每个效果手写 Dart 类
+1. **先修 `bitcrush` 测试辅助的超尺寸块问题**（handoff §2.2：`process` 会静默拒绝
+   超过 `max_block` 的块，测试测到的是干信号）——可能一次消掉 2-4 个红测
+2. **修 `saturation` 4 项**：transfer 一致性（让 `transfer()` 成为 `process`
+   的单样本内核）→ NaN 首次出现点（不要末尾 clamp）→ 立体声串扰（共享缓冲
+   声道间清零）→ 电平曲线实测后定容差
+3. **修 `bitcrush` 剩余项**（handoff §3.2）
+4. **清 clippy 8 项**（含 2 项 `extern fn uses dyn EffectProcessor, not FFI-safe`，
+   这两条涉及 FFI 安全边界，处理时对照 `docs/ABI.md` 原则 P1/P2）
+5. **SIMD 二选一**：实现热点 SIMD（EQ/卷积/饱和，`cfg` 分平台、wasm 用 `simd128`），
+   或在 `s5-report.md` 明确记为已知缺口并说明原因——**不许沉默略过**
+6. **完整门禁**（含 `flutter analyze` 0 error + `flutter test` 全绿；
+   本机 `flutter analyze` 很慢，**后台跑**；S3 的 Dart 门禁从未取得过结论，
+   **先实测基线再动手**，不要把别人的问题算到自己头上）
+7. **收尾文档四件套**：
+   - 新建 `docs/stages/s5-report.md`（格式照 `s3-report.md`）
+   - `PLAN` §6 进度表：S5 行改为实际状态
+   - `COORDINATION` C-011：🟡 → 🟢
+   - ~~删除 `docs/prompts/s5-effect-brief.md`~~（**已完成，无需再做**）
 
 ## 硬性约束
 
 - **不引入第三方 DAW 品牌名**
-- **禁止 VST**（许可与 AGPL-3.0 冲突）；插件用 CLAP 或自研 ABI
-- 实时路径禁止 `Vec::push` / `Box::new` / `String` / `Mutex` / `println!`
-- 改 `lib.rs` / `Cargo.toml` / `ffi/` 前，先在 `docs/COORDINATION.md` 登记
-- **只在自己的子目录**（`automation/`、`effects/`）内改，避免与 Agent-A / Agent-D 冲突
-- 四项全绿：
-  ```
-  cargo clippy --all-targets -- -D warnings
-  cargo test
-  flutter analyze      # 0 error
-  flutter test
-  ```
+- **只用 write/edit 工具改源码，绝不用 PowerShell 写文件**
+  （历史上把一个 80KB 文件的 UTF-8 彻底毁掉过）
+- `effects/**` 保持纯 ASCII：`+/-` 代替 `±`、`->` 代替 `→`、`<=` 代替 `≤`、
+  `x` 代替 `×`，避免 CJK
+- 红测原则：**默认假设实现有错而非测试太严**——本轮已修的 8 个真实 bug
+  （biquad 少了 2π、Hann 相干增益等）都证明红测往往是真的
+- 全量 `cargo test` 约 8 分钟，用测试名过滤定位
+- ABI 再追加导出用 **0.5.0**（先在 COORDINATION 登记）
 
-## 验收
-
-- 音量自动化曲线播放正确、无 zipper noise
-- Write 模式能录出自动化点
-- 1000 个自动化点求值 < 2% CPU
-- 所有效果在 256 帧缓冲下**零分配**
-- 128 轨各挂 3 个效果，实时率 < 50%
-
-完成后交付 `docs/stages/s2-report.md` 与 `s5-report.md`，并更新 `PLAN` §6 进度表。
+完成后交付 `docs/stages/s5-report.md`，更新 `PLAN` §6 进度表。

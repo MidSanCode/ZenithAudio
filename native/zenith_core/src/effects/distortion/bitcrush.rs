@@ -174,10 +174,16 @@ const DITHER_STEP: f32 = 1.0;
 
 /// The exponent of the drive-compensation trim.
 ///
-/// `out = shaped(x*g) / g^0.8`. Close to full compensation, because the bit
-/// crusher's character comes from the quantiser rather than from the level -
-/// unlike a saturator, where a little level rise is part of the feel.
-const COMPENSATION_EXPONENT: f32 = 0.8;
+/// `out = shaped(x*g) / g^0.5`. A bit crusher drives into the quantiser, which
+/// saturates at full scale, so the output level is bounded by `g^-p` once the
+/// drive is enough to fill the lattice; below that it grows as `g^(1-p)`. No
+/// single exponent holds both regimes perfectly, so this is the value that
+/// minimises the worst-case swing: measured on a -12 dB tone over 0..36 dB it is
+/// 6 dB, whereas the previous `0.8` (chosen to be "close to full
+/// compensation") let the level collapse 7 dB by 24 dB and 14 dB by 36 dB -
+/// the opposite of what compensation is for. See `raising_drive_does_not_wildly_
+/// change_the_output_level`.
+const COMPENSATION_EXPONENT: f32 = 0.5;
 
 /// The effect's static description.
 pub static DESCRIPTOR: EffectDescriptor = EffectDescriptor {
@@ -1132,20 +1138,40 @@ mod tests {
             );
 
             // And a symmetric bipolar signal must stay centred. Measured after
-            // the blocker has settled, over many cycles, so the mean is the
-            // offset rather than the signal.
+            // the blocker has settled, over a whole number of cycles, so the
+            // mean is the offset rather than the signal.
+            //
+            // The window must contain an integer number of cycles: at 48 kHz a
+            // 300 Hz tone has a period of 160 samples, and a window that is not
+            // a multiple of 160 has a non-zero mean *before* any offset is
+            // added. The previous 4096-sample window held 25.6 cycles and so
+            // measured 0.009 of pure signal, which is far larger than any DC the
+            // effect could add. 5120 samples is exactly 32 cycles, whose own
+            // mean is zero by construction - anything left is the effect.
             let mut effect = make();
             effect.set_parameter(PARAM_BITS, bits);
             effect.set_parameter(PARAM_RATE, SR);
             effect.set_parameter(PARAM_DRIVE, 0.0);
             effect.set_wet(1.0);
             settle(&mut effect);
-            let frames = 4_096;
-            let out = capture(&mut effect, 16, 256, |block, index| {
-                let n = block * 256 + index;
-                sin_poly(2.0 * PI * 300.0 * n as f32 / SR) * 0.8
-            });
-            let sum: f32 = out[..frames].iter().sum();
+            let frames = 5_120;
+            let mut tail = alloc::vec![0.0_f32; frames];
+            run(
+                &mut effect,
+                80,
+                256,
+                |block, index| {
+                    let n = block * 256 + index;
+                    sin_poly(2.0 * PI * 300.0 * n as f32 / SR) * 0.8
+                },
+                |block, left, _| {
+                    if block >= 60 {
+                        tail[(block - 60) * 256..(block - 60) * 256 + 256]
+                            .copy_from_slice(left);
+                    }
+                },
+            );
+            let sum: f32 = tail.iter().sum();
             let offset = sum / frames as f32;
             // What the blocker guarantees is that the offset is bounded by a
             // small fraction of one lattice step, not that it vanishes. A
@@ -1388,8 +1414,17 @@ mod tests {
     #[test]
     fn the_processing_order_is_drive_then_quantise_then_hold() {
         // The order is documented, so it must be the one that runs. The test
-        // builds the two candidate orders locally and asks the effect which one
-        // it agrees with, using a signal that distinguishes them.
+        // builds two candidate orders locally and asks the effect which one it
+        // agrees with.
+        //
+        // The candidate that is *actually* distinguishable is whether the drive
+        // sits before or after the quantiser. The sample-and-hold cannot be used
+        // to distinguish anything: the quantiser is memoryless, so
+        // `hold(quantise(x))` and `quantise(hold(x))` are equal for *every*
+        // input - both capture the value at the hold boundary and repeat it -
+        // and a test built on that pair would compare two identical arrays no
+        // matter what signal it fed. The hold is therefore applied in the same
+        // place in both candidates and only the gain's position moves.
         let drive_db = 18.0_f32;
         let bits = 2.0_f32;
         let rate = 6_000.0_f32; // hold of 8
@@ -1402,12 +1437,9 @@ mod tests {
         settle(&mut effect);
 
         let frames = 256;
-        // A signal that moves *fast* relative to the hold window, which is what
-        // makes the two orders distinguishable. A slow sine would quantise to
-        // the same code at every sample of a hold either way, so both candidate
-        // orders would produce identical output and the test could not tell
-        // them apart. Alternating samples a step apart guarantees the code
-        // changes across the window.
+        // A signal that moves fast relative to the hold window, so the code
+        // captured at each boundary is a definite value rather than something
+        // near a step edge.
         let input: alloc::vec::Vec<f32> = (0..frames)
             .map(|n| if n % 2 == 0 { 0.45 } else { -0.45 })
             .collect();
@@ -1418,7 +1450,7 @@ mod tests {
         let hold = effect.hold_length();
         assert_eq!(hold, 8);
 
-        // The order under test: drive -> quantise -> hold.
+        // The documented order: drive the sample, then quantise, then hold.
         let mut expected = alloc::vec![0.0_f32; frames];
         let mut held = 0.0_f32;
         let mut countdown = 0usize;
@@ -1433,20 +1465,22 @@ mod tests {
             expected[index] = held;
         }
 
-        // The rejected order: hold -> quantise. Building it makes the test an
-        // assertion about *which* order runs rather than merely that some
-        // quantisation happened.
+        // The rejected order: quantise the sample first, then apply the drive
+        // gain to the quantised value. The gain is no longer inside the
+        // quantiser, so the level lattice is used differently - which is the
+        // whole reason the documented order drives first.
         let mut wrong = alloc::vec![0.0_f32; frames];
-        let mut held_input = 0.0_f32;
+        let mut held = 0.0_f32;
         let mut countdown = 0usize;
         for (index, &sample) in input.iter().enumerate() {
+            let quantised = quantize(sample, bits) * gain * comp;
             if countdown == 0 {
-                held_input = sample;
+                held = quantised;
                 countdown = hold - 1;
             } else {
                 countdown -= 1;
             }
-            wrong[index] = quantize(held_input * gain, bits) * comp;
+            wrong[index] = held;
         }
 
         // Both candidates are compared after the same treatment as the effect's
@@ -1473,7 +1507,7 @@ mod tests {
         );
         assert!(
             to_expected < to_wrong,
-            "the effect matches the hold-then-quantise order ({to_wrong}) better than \
+            "the effect matches the quantise-then-drive order ({to_wrong}) better than \
              the documented drive-quantise-hold order ({to_expected})"
         );
         assert!(
@@ -1881,45 +1915,35 @@ mod tests {
         // The comparison is made on an *AC* signal, not a constant one: every
         // path through this effect ends in a DC blocker, so a constant input is
         // removed entirely by design and comparing against it would measure the
-        // blocker rather than the transfer curve. Two samples half a cycle
-        // apart on a slow sine are near enough to a constant for the curve to
-        // be evaluated at a known point, while still being AC.
+        // blocker rather than the transfer curve. A 1 kHz tone is two decades
+        // above the blocker's 5 Hz corner, so once the blocker has settled it is
+        // transparent to within a fraction of a percent, while the signal is
+        // still firmly AC.
         let mut effect = make();
         effect.set_parameter(PARAM_BITS, 4.0);
         effect.set_parameter(PARAM_RATE, SR);
         effect.set_parameter(PARAM_DRIVE, 12.0);
         effect.set_wet(1.0);
 
-        let hz = 20.0_f32; // slow enough that one sample barely moves
-        let frames = 256;
-        // The curve is memoryless, so the whole expectation is computed from
-        // the input signal up front; `process` is then run and compared against
-        // it. Computing it inside the observer closure would need `effect`
-        // immutably while it is already borrowed mutably.
-        let input: alloc::vec::Vec<f32> = (0..4 * frames)
-            .map(|n| sin_poly(2.0 * PI * hz * n as f32 / SR) * 0.4)
-            .collect();
-        let expected: alloc::vec::Vec<f32> = input
-            .iter()
-            .map(|&x| effect.transfer(x))
-            .collect();
+        let hz = 1_000.0_f32;
+        let blocks = 120usize;
+        let frames = 256usize;
+        let capture_from = blocks - 4;
+        // The signal runs continuously from block 0, so both the blocker's
+        // state and the oscillator's phase are settled by the time the capture
+        // window opens. The memoryless curve is evaluated on the exact sample
+        // the audio path sees.
+        let sample_at = |n: usize| sin_poly(2.0 * PI * hz * n as f32 / SR) * 0.4;
 
         let mut out = alloc::vec![0.0_f32; 4 * frames];
         run(
             &mut effect,
-            120,
+            blocks,
             frames,
-            |block, index| {
-                if block < 100 {
-                    // Settle the blocker on the same AC signal first.
-                    0.0
-                } else {
-                    input[(block - 100) * frames + index]
-                }
-            },
+            |block, index| sample_at(block * frames + index),
             |block, left, _| {
-                if block >= 104 {
-                    let start = (block - 100) * frames;
+                if block >= capture_from {
+                    let start = (block - capture_from) * frames;
                     out[start..start + frames].copy_from_slice(left);
                 }
             },
@@ -1928,11 +1952,12 @@ mod tests {
         let mut worst = 0.0_f32;
         let mut checked = 0usize;
         for (index, got) in out.iter().enumerate() {
-            let want = expected[index];
+            let n = capture_from * frames + index;
+            let want = effect.transfer(sample_at(n));
             worst = worst.max((got - want).abs());
             checked += 1;
         }
-        assert!(checked > 1_000, "only {checked} samples were compared");
+        assert!(checked == 4 * frames, "only {checked} samples were compared");
         // The drive is 12 dB with a 4-bit lattice, so one step is a large part
         // of the signal. The honest bound is a fraction of one step, not
         // float-exact agreement: the audio path passes through a one-pole DC

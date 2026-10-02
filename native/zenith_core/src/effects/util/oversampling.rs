@@ -125,13 +125,37 @@ impl Default for Oversampler {
     }
 }
 
-/// The half-band filter coefficients, evaluated at compile time.
+/// Half-band coefficients for a 2x design, evaluated at compile time.
 ///
-/// A windowed sinc: `h[n] = sinc((n - c) / 2) * w[n]`, normalised to unit DC
-/// gain. `const fn` means the table is baked into the binary rather than
-/// computed on first use, which matters because first use is the audio thread
-/// starting up.
-const HALF_BAND: [f32; HALF_BAND_TAPS] = build_half_band();
+/// A windowed sinc normalised to unit DC gain. `const fn` means the table is
+/// baked into the binary rather than computed on first use, which matters
+/// because first use is the audio thread starting up.
+///
+/// There is one table **per factor**, because a filter designed for 2x has its
+/// cutoff at quarter rate - half of base Nyquist - and running it at 4x leaves
+/// the whole band between half and base Nyquist in its stopband. That is not a
+/// subtle error: it rolled the fundamental off by 0.77x in the middle of the
+/// passband, so a 4x effect was quietly attenuating (and ringing) the signal it
+/// was supposed to pass through unchanged. The cutoff must scale with the
+/// factor, so the table does too.
+const HALF_BAND_X2: [f32; HALF_BAND_TAPS] = build_half_band(2);
+/// Half-band coefficients for a 4x design.
+const HALF_BAND_X4: [f32; HALF_BAND_TAPS] = build_half_band(4);
+/// Half-band coefficients for an 8x design.
+const HALF_BAND_X8: [f32; HALF_BAND_TAPS] = build_half_band(8);
+
+/// The interpolation/decimation table for `factor`.
+///
+/// `None` never reaches the filter (the factor-1 paths copy straight through),
+/// so it is mapped to the 2x table rather than needing a fourth constant.
+#[must_use]
+const fn tap_table(factor: OversamplingFactor) -> &'static [f32; HALF_BAND_TAPS] {
+    match factor {
+        OversamplingFactor::X8 => &HALF_BAND_X8,
+        OversamplingFactor::X4 => &HALF_BAND_X4,
+        OversamplingFactor::X2 | OversamplingFactor::None => &HALF_BAND_X2,
+    }
+}
 
 /// `const`-evaluable sine, so the filter table can be built at compile time.
 ///
@@ -175,7 +199,7 @@ const fn const_cos(x: f32) -> f32 {
     const_sin(x + core::f32::consts::FRAC_PI_2)
 }
 
-const fn build_half_band() -> [f32; HALF_BAND_TAPS] {
+const fn build_half_band(factor: u32) -> [f32; HALF_BAND_TAPS] {
     use core::f32::consts::PI;
     let mut taps = [0.0_f32; HALF_BAND_TAPS];
     let center = (HALF_BAND_TAPS - 1) as f32 / 2.0;
@@ -183,9 +207,12 @@ const fn build_half_band() -> [f32; HALF_BAND_TAPS] {
     let mut n = 0;
     while n < HALF_BAND_TAPS {
         let x = n as f32 - center;
-        // sinc(x/2) — the half-band cutoff sits at a quarter of the
-        // oversampled rate, i.e. half of Nyquist at the base rate.
-        let arg = x * 0.5;
+        // sinc(x/factor): the cutoff sits at a quarter of the *oversampled*
+        // rate, i.e. a little below base Nyquist. At 2x that is sinc(x/2); at
+        // higher factors the argument shrinks so the passband widens to cover
+        // the base band. Using a fixed /2 at 4x would place the cutoff at only
+        // half of base Nyquist.
+        let arg = x / factor as f32;
         let sinc = if arg.abs() < 1e-9 {
             1.0
         } else {
@@ -288,11 +315,16 @@ impl Oversampler {
     }
 
     /// One step of the FIR at the oversampled rate.
-    fn filter_step(history: &mut [f32; HALF_BAND_TAPS], index: &mut usize, input: f32) -> f32 {
+    fn filter_step(
+        history: &mut [f32; HALF_BAND_TAPS],
+        index: &mut usize,
+        input: f32,
+        taps: &[f32; HALF_BAND_TAPS],
+    ) -> f32 {
         history[*index] = if input.is_finite() { input } else { 0.0 };
         let mut acc = 0.0_f32;
         let mut h = *index;
-        for tap in HALF_BAND.iter() {
+        for tap in taps.iter() {
             acc += *tap * history[h];
             h = if h == 0 { HALF_BAND_TAPS - 1 } else { h - 1 };
         }
@@ -325,7 +357,7 @@ impl Oversampler {
             // Zero-stuffing: emit the (scaled) sample then `factor - 1` zeros.
             for phase in 0..factor {
                 let stuffed = if phase == 0 { sample * factor as f32 } else { 0.0 };
-                let filtered = Self::filter_step(&mut self.up_history, &mut self.up_index, stuffed);
+                let filtered = Self::filter_step(&mut self.up_history, &mut self.up_index, stuffed, tap_table(self.factor));
                 if written < output.len() {
                     output[written] = filtered;
                     written += 1;
@@ -356,7 +388,7 @@ impl Oversampler {
         for &sample in input {
             for phase in 0..factor {
                 let stuffed = if phase == 0 { sample * factor as f32 } else { 0.0 };
-                let filtered = Self::filter_step(&mut self.up_history, &mut self.up_index, stuffed);
+                let filtered = Self::filter_step(&mut self.up_history, &mut self.up_index, stuffed, tap_table(self.factor));
                 work[written] = filtered;
                 written += 1;
             }
@@ -387,7 +419,7 @@ impl Oversampler {
         }
         let mut written = 0;
         for (index, &sample) in input.iter().enumerate() {
-            let filtered = Self::filter_step(&mut self.down_history, &mut self.down_index, sample);
+            let filtered = Self::filter_step(&mut self.down_history, &mut self.down_index, sample, tap_table(self.factor));
             // Keep every `factor`-th filtered sample.
             //
             // Gain: the up-stage scaled the zero-stuffed impulse train by
@@ -420,7 +452,7 @@ impl Oversampler {
             // Copy out of `work` first so the mutable borrow of self ends
             // before `filter_step` needs `self.down_history`.
             let sample = self.work[index];
-            let filtered = Self::filter_step(&mut self.down_history, &mut self.down_index, sample);
+            let filtered = Self::filter_step(&mut self.down_history, &mut self.down_index, sample, tap_table(self.factor));
             if index % factor == 0 && written < output.len() {
                 output[written] = filtered;
                 written += 1;
@@ -560,36 +592,94 @@ mod tests {
     fn the_half_band_filter_has_unit_dc_gain() {
         // If the filter does not sum to 1.0, enabling oversampling would
         // change the level, which users would hear as a volume jump when they
-        // switch a saturation stage on.
-        let sum: f32 = HALF_BAND.iter().sum();
-        assert!(
-            (sum - 1.0).abs() < 1e-4,
-            "half-band DC gain is {sum}, expected 1.0"
-        );
+        // switch a saturation stage on. Checked for every factor, since each
+        // has its own table.
+        for factor in [
+            OversamplingFactor::X2,
+            OversamplingFactor::X4,
+            OversamplingFactor::X8,
+        ] {
+            let sum: f32 = tap_table(factor).iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 1e-4,
+                "{factor:?} half-band DC gain is {sum}, expected 1.0"
+            );
+        }
     }
 
     #[test]
     fn the_half_band_filter_is_symmetric() {
         // Linear phase depends on symmetry; a broken table would smear
         // transients and make the reported latency wrong.
-        for i in 0..HALF_BAND_TAPS / 2 {
-            let mirrored = HALF_BAND[HALF_BAND_TAPS - 1 - i];
-            assert!(
-                (HALF_BAND[i] - mirrored).abs() < 1e-6,
-                "tap {i} ({}) != mirror ({})",
-                HALF_BAND[i],
-                mirrored
-            );
+        for factor in [
+            OversamplingFactor::X2,
+            OversamplingFactor::X4,
+            OversamplingFactor::X8,
+        ] {
+            let taps = tap_table(factor);
+            for i in 0..HALF_BAND_TAPS / 2 {
+                let mirrored = taps[HALF_BAND_TAPS - 1 - i];
+                assert!(
+                    (taps[i] - mirrored).abs() < 1e-6,
+                    "tap {i} ({}) != mirror ({})",
+                    taps[i],
+                    mirrored
+                );
+            }
         }
     }
 
     #[test]
     fn the_half_band_filter_is_finite_and_normalized() {
-        for (i, tap) in HALF_BAND.iter().enumerate() {
-            assert!(tap.is_finite(), "tap {i} is not finite");
+        for factor in [
+            OversamplingFactor::X2,
+            OversamplingFactor::X4,
+            OversamplingFactor::X8,
+        ] {
+            for (i, tap) in tap_table(factor).iter().enumerate() {
+                assert!(tap.is_finite(), "{factor:?} tap {i} is not finite");
+            }
+            let peak = tap_table(factor)
+                .iter()
+                .fold(0.0_f32, |m, t| m.max(t.abs()));
+            assert!(
+                peak < 1.0,
+                "{factor:?} peak tap {peak} suggests an unnormalized filter"
+            );
         }
-        let peak = HALF_BAND.iter().fold(0.0_f32, |m, t| m.max(t.abs()));
-        assert!(peak < 1.0, "peak tap {peak} suggests an unnormalized filter");
+    }
+
+    #[test]
+    fn a_4x_round_trip_does_not_attenuate_the_passband() {
+        // The bug this test pins: the tables were all built for 2x, so a 4x
+        // round trip ran the signal through a filter whose cutoff sat at half
+        // of base Nyquist. A constant came back correct - the stopband is
+        // irrelevant at DC - but an in-band sine was rolled off and ringed,
+        // which is what corrupted the saturator's transfer function.
+        use super::super::dsp::sin_poly;
+        use core::f32::consts::PI;
+
+        let factor = OversamplingFactor::X4;
+        let mut os = Oversampler::new(factor);
+        let frames = 2_048;
+        os.configure(factor, 48_000.0, frames);
+
+        let input: alloc::vec::Vec<f32> = (0..frames)
+            .map(|n| sin_poly(2.0 * PI * 300.0 * n as f32 / 48_000.0) * 0.5)
+            .collect();
+        let mut wide = alloc::vec![0.0_f32; frames * 4];
+        let mut out = alloc::vec![0.0_f32; frames];
+        let up = os.upsample(&input, &mut wide);
+        assert_eq!(up, frames * 4);
+        assert_eq!(os.downsample(&wide[..up], &mut out), frames);
+
+        // Compare peak in the settled interior; a passband that is flat to
+        // within a percent is enough to keep the transfer test honest.
+        let peak = out[512..].iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(
+            (peak - 0.5).abs() < 0.01,
+            "a 4x round trip changed a 300 Hz sine's peak from 0.5 to {peak}"
+        );
     }
 
     #[test]

@@ -5,62 +5,76 @@
 
 **主计划**：`docs/PLAN_DAW_PARITY.md`
 **C ABI 契约**：`docs/ABI.md`
+**S5 接手任务书**：`docs/stages/s5-handoff.md`
+
+> 状态快照：2026-10-04（提示词按此快照编写，开工前请对照 §6 进度表复核）
 
 ---
 
-## 文件清单
+## 当前项目状态（已核实）
 
-| 会话 | 文件 | 负责阶段 | 当前可开工？ |
+| 阶段 | 状态 | 备注 |
+|---|---|---|
+| S0 基础重构 | ✅ | tag `s0-baseline` |
+| S1.0 前置项 A/B/C | ✅ | panic 修复 + 适配层 + 34 调用点迁移，122/122 |
+| S1.1 引擎主体 | ⬜ | `src/engine/`、`src/driver/` 不存在——**Agent-A 的任务** |
+| S1.5 Web 接入 | ⬜ | 第一段可先行（不依赖 S1.1） |
+| S2 参数/自动化 | ✅ | 316 Rust tests，门禁全绿，ABI 0.2.0 |
+| S3 混音器 | 🟡 | Rust 侧完成（149 tests，ABI 0.3.0）；**Dart 侧门禁未取得** |
+| S4 渲染/导出/PDC | ⬜ | 等 S1.1 |
+| S5 效果器套件 | 🟡 | 852/8 红；**8 个 distortion 红测 + clippy 8 项 + SIMD 未决** |
+| S6 编曲/卷帘/MIDI | 🟡 | 模型层落地；卷帘增强与 MIDI 未做 |
+| S7 插件宿主 | ⬜ | 等 S1.1（CLAP FFI 等独立部分可先行） |
+| S8 音频编辑 | ⬜ | **算法层零依赖可先行** |
+| S9 收尾 | ⬜ | 最后 |
+
+ABI 版本线性序列：S2 = 0.2.0 → S3 = 0.3.0 → S5 = 0.4.0 →（下一个新增）0.5.0
+
+---
+
+## 文件清单与开工建议
+
+| 会话 | 文件 | 任务 | 可否立即开工 |
 |---|---|---|---|
-| **Agent-A** | [`agent-a-s1-s4.md`](agent-a-s1-s4.md) | S1 Rust 音频核心 + S4 离线渲染 | ✅ **第一批**（先只做 S1.0 前置项） |
-| **Agent-B** | [`agent-b-s1.5-web.md`](agent-b-s1.5-web.md) | S1.5 Web 接入与降级 | 🟡 第三批（或先做不依赖驱动的部分） |
-| **Agent-C** | [`agent-c-s2-s5.md`](agent-c-s2-s5.md) | S2 参数/自动化 + S5 效果器 | 🟡 第二批可做 S2 纯逻辑部分 |
-| **Agent-D** | [`agent-d-s3-s7.md`](agent-d-s3-s7.md) | S3 混音器 + S7 插件宿主 | ⛔ 第四批（需 S1 图结构稳定） |
-| **Agent-E** | [`agent-e-s6.md`](agent-e-s6.md) | S6 编曲/卷帘/MIDI | ✅ **第二批**（模型层已落地，继续推进） |
-| **Agent-F** | [`agent-f-s8-s9.md`](agent-f-s8-s9.md) | S8 音频编辑 + S9 收尾 | 🟡 第五批（算法部分可先做） |
-
-**Agent-0（S0）已完成**，无需提示词。
+| **Agent-A** | [`agent-a-s1-s4.md`](agent-a-s1-s4.md) | S1.1 引擎主体 + S4 | ✅ **最优先**（所有人的图依赖它） |
+| **Agent-C** | [`agent-c-s2-s5.md`](agent-c-s2-s5.md) | S5 收尾（8 红测/clippy/SIMD） | ✅ **可立即**（与 S1.1 零冲突） |
+| **Agent-D** | [`agent-d-s3-s7.md`](agent-d-s3-s7.md) | S3 Dart 门禁 + S7 | ✅ S3 收尾可立即；S7 等 S1.1 |
+| **Agent-E** | [`agent-e-s6.md`](agent-e-s6.md) | S6 卷帘/MIDI | ✅ 可立即（模型层已就绪） |
+| **Agent-B** | [`agent-b-s1.5-web.md`](agent-b-s1.5-web.md) | S1.5 Web | 🟡 第一段可立即；第二段等 S1.1 |
+| **Agent-F** | [`agent-f-s8-s9.md`](agent-f-s8-s9.md) | S8 算法 + S9 | 🟡 算法层可立即；接线等 S1.1/S3 |
 
 ---
 
-## 启动顺序（重要）
+## 启动顺序建议
 
-**不要一次放 6 个会话。** 建议分批：
+**不要一次放 6 个会话。** 建议：
 
 | 批次 | 启动 | 理由 |
 |---|---|---|
-| **第 1 批** | **Agent-A（先只做 S1.0 前置项）** | 前置项 A/B 是所有人的地基；B 的适配层让后续换引擎可回滚。**做完先汇报，不要直接冲 S1.1** |
-| **第 2 批** | Agent-E（S6）+ Agent-C（S2 纯逻辑部分） | 二者都主要新增自有目录，与 S1 冲突面小，可与第 1 批并行 |
-| **第 3 批** | Agent-A（S1.1 主体）、Agent-B（不依赖驱动的部分） | S1.0 通过后放行 |
-| **第 4 批** | Agent-C（S5）、Agent-D（S3/S7） | 需 S1 的图结构稳定；S5 还需先扩 ABI |
-| **第 5 批** | Agent-F（S8/S9） | 需 S3 与 S6 稳定 |
+| **第 1 批** | **Agent-A（S1.1）+ Agent-C（S5 收尾）** | 两者目录完全隔离（engine//driver/ vs effects/）；A 是关键路径，C 的 8 个红测不修任何人都不该引用 effects |
+| **第 2 批** | Agent-E（S6）+ Agent-D（S3 Dart 收尾） | E 只动卷帘/MIDI 新文件；D 的 Dart 门禁是全项目第一次拿到可靠结论，越早越好 |
+| **第 3 批** | Agent-B（S1.5 第一段）+ Agent-F（S8 算法层） | 都是零依赖先行部分 |
+| **第 4 批** | 各会话的第二段（S7、worklet、S8 接线） | 等 S1.1 落地 |
 
-每个会话开工前**必须先确认上游依赖已落地**——各提示词里已写明各自的前置检查项。
-
----
-
-## 当前阻断项（开工前必须解决）
-
-| # | 等级 | 阻断项 | 归属 |
-|---|---|---|---|
-| 1 | 🔴 | `Cargo.toml` 的 `panic = "abort"` 与 `lib.rs` 的 `catch_unwind` 承诺矛盾 | Agent-A 第一个任务 |
-| 2 | 🔴 | `AudioEngine` 接口零实现者、34 个调用点仍绑在 `AudioService` | Agent-A 第二个任务（前置项 B） |
-| 3 | 🟡 | S5 开工前需先扩 ABI（参数描述符查询） | Agent-C 第一个任务 |
-| 4 | 🟡 | `docs/ABI.md` 顶部"s0 前 native/ 不存在"的说明已过时 | 已在检查中更新 |
+**每会话开工前必须确认其提示词里写的前置检查项。**
 
 ---
 
 ## 所有会话的通用纪律（提示词中已内嵌）
 
-1. 先读 `docs/PLAN_DAW_PARITY.md` §0.2（硬性约束）；涉及跨语言时加读 `docs/ABI.md`
+1. 先读 `docs/PLAN_DAW_PARITY.md` §0.2；涉及跨语言加读 `docs/ABI.md`
 2. 提交前四项全绿：
    ```
    cargo clippy --all-targets -- -D warnings
    cargo test
-   flutter analyze      # 0 error
+   flutter analyze      # 0 error（本机慢，后台跑）
    flutter test
    ```
-3. **不许**在代码 / 注释 / 文档 / UI 文案中出现任何第三方 DAW 品牌名
-4. 改 `lib.rs` / `Cargo.toml` / `ffi/` 三个共享文件前，先在 `docs/COORDINATION.md` 登记
-5. 完成后写 `docs/stages/sN-report.md` 并更新主计划 §6 进度表
-6. Rust 侧**只在自己的子目录内改**（`automation/`、`effects/`、`mixer/`、`driver/` 等）
+3. **不许**出现任何第三方 DAW 品牌名（代码/注释/文档/UI）
+4. 改 `src/lib.rs` / `Cargo.toml` / `src/ffi/` 前先在 `docs/COORDINATION.md` 登记
+5. ABI minor 是**全项目单一线性序列**：下一个新增导出用 0.5.0
+6. **只用 write/edit 工具改源码，绝不用 PowerShell 写文件**
+   （历史上毁过一个 80KB 文件的 UTF-8，不可逆）
+7. `effects/**` 等既有 Rust 文件保持纯 ASCII
+8. 完成后写 `docs/stages/sN-report.md` 并更新主计划 §6 进度表
+9. **每小步保持仓库可编译可测试**（S0 曾接手过一个 135 error 的烂摊子）

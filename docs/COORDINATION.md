@@ -218,7 +218,8 @@
 | **与 S2 的关系** | 效果参数用 `ParameterKind::Effect`（判别值 3，**已冻结**）注册，槽索引复用 `ParameterAddress::effect(channel, slot, sub)` 的「通道高 24 位 / 槽低 8 位」打包。S5 **不新增寻址方式**，也不改动 S2 的求值顺序；效果参数因此**自动获得**自动化与调制能力（PLAN §3.S5 第 2 条）。 |
 | **影响面** | Agent-A（S1）：引擎接线时可在块边界依 `effect_chain` 的 `processing()` 顺序调用效果；`latency_samples()` 供 S4 的 PDC。Agent-D（S3）：混合器的效果槽现在有了可解析的 kind 语义（解析函数在 `effects::registry`），`effect_chain.rs` **无需改动**。Dart 侧 `lib/native/zenith_core.dart` 的 `kExpectedAbiVersion` 需同步为 `0x000400`。 |
 | **回滚方式** | `git revert <S5 各笔提交>`。S5 代码全部位于 `src/effects/**`、`src/ffi/effect_api.rs`、`lib/effects/**`、`lib/widgets/effects/**`；`types.rs` 与 `mod.rs` 的改动是**纯追加**，可单独回退 S5 段而不影响 S2/S3。 |
-| **状态** | 🟡 进行中 |
+| **收尾实测（2026-10-05）** | `cargo test` **866 passed / 0 failed**（含修复后的 distortion 75 项）、`cargo clippy --all-targets -- -D warnings` **exit 0**、`cargo check --target wasm32-unknown-unknown` **exit 0**。**SIMD 已落地**：`effects/util/simd.rs`，cfg 分平台（aarch64 NEON / wasm32 simd128 / 标量回退），接入饱和、多模、卷积、EQ 四个热点。ABI 签名修正：`zenith_effect_instance_parameter_count` / `zenith_effect_instance_describe_parameter` 的 `*const dyn EffectProcessor`（胖指针，违反 P1）改为不透明细指针 `*const ZenithEffectProcessor`（符合 P2），未新增导出。⚠️ Dart 门禁因本机未装 Flutter SDK 未取得（同 S3）。见 `docs/stages/s5-report.md` |
+| **状态** | 🟢 已生效 |
 
 ---
 

@@ -735,15 +735,14 @@ impl EffectProcessor for AlgorithmicReverb {
             };
             {
                 let network = &mut self.networks[channel];
-                for index in 0..frames {
+                for (index, slot) in destination.iter_mut().enumerate().take(frames) {
                     // Both channels are fed the same pre-delayed signal: the
                     // pre-delay ring is written once per block, not once per
                     // channel, so the two networks hear identical input and
                     // differ only in their (deliberately different) line
                     // lengths. That is what makes the tail wide rather than
                     // merely duplicated.
-                    destination[index] =
-                        network.process_sample(self.predelayed[index], decay_scale, allpass);
+                    *slot = network.process_sample(self.predelayed[index], decay_scale, allpass);
                 }
             }
         }
@@ -1502,8 +1501,8 @@ mod tests {
         let mut channel = alloc::vec![0.0_f32; chunk];
         let mut energy = 0.0_f32;
         for block in 0..16 {
-            for index in 0..chunk {
-                channel[index] = if block == 0 && index == 0 { 1.0 } else { 0.0 };
+            for (index, slot) in channel.iter_mut().enumerate() {
+                *slot = if block == 0 && index == 0 { 1.0 } else { 0.0 };
             }
             {
                 let mut views = [&mut channel[..]];

@@ -292,16 +292,22 @@ impl MultimodeFilter {
             .design(self.mode, cutoff, self.resonance, 0.0, self.sample_rate);
     }
 
-    /// The cutoff the envelope follower currently asks for.
-    fn effective_cutoff(&self) -> f32 {
-        let envelope = self.channels[0].envelope.min(1.0);
-        if self.env_amount.abs() < 1e-6 {
+    /// The cutoff the envelope follower currently asks for, for `channel`.
+    ///
+    /// Used by `process` to build each channel's filter target. Kept as a named
+    /// method rather than inlined so the per-channel envelope and the
+    /// parameter-level `env_amount` are combined in exactly one place: the
+    /// block-rate smoothing below and any future per-channel caller then cannot
+    /// disagree about how much the envelope opens the filter.
+    fn effective_cutoff(&self, channel: usize) -> f32 {
+        let envelope = self.channels[channel].envelope.min(1.0);
+        let depth = self.env_amount / 100.0;
+        if depth.abs() < 1e-6 {
             return self.cutoff_hz;
         }
         // A depth of 100% opens the filter by four octaves at full level:
         // enough range for a wah without turning into a pitch sweep.
-        let octaves = (self.env_amount / 100.0) * 4.0 * envelope;
-        self.cutoff_hz * powf(2.0, octaves)
+        self.cutoff_hz * powf(2.0, depth * 4.0 * envelope)
     }
 }
 
@@ -389,14 +395,7 @@ impl EffectProcessor for MultimodeFilter {
             self.channels[channel].envelope = envelope;
 
             // ── Cutoff, with envelope offset ──
-            let target = {
-                let depth = self.env_amount / 100.0;
-                if depth.abs() < 1e-6 {
-                    self.cutoff_hz
-                } else {
-                    self.cutoff_hz * powf(2.0, depth * 4.0 * envelope.min(1.0))
-                }
-            };
+            let target = self.effective_cutoff(channel);
             let smoothed = self.smoothed_cutoff + (target - self.smoothed_cutoff) * cutoff_coeff;
             let cutoff = smoothed.clamp(20.0, self.sample_rate * 0.45);
             self.smoothed_cutoff = cutoff;
@@ -405,14 +404,21 @@ impl EffectProcessor for MultimodeFilter {
             // ── Drive, oversampled ──
             if use_drive {
                 let grain = drive_gain;
-                let comp = drive_comp;
+                // The compensation is applied *after* the shaper as a separate
+                // pass, rather than folded into the shaping closure as
+                // `shape(...) * comp`. Multiplication is commutative and the
+                // closure is memoryless, so the result is identical, but
+                // factoring it out lets the whole compensation be one SIMD
+                // kernel over the finished block instead of a scalar multiply
+                // inside the per-sample callback - and the callback is also
+                // handed to the oversampler, where it cannot be vectorised.
                 let written = if self.oversamplers[channel].is_prepared() && scratch_len > 0 {
                     let scratch = &mut self.scratch[..scratch_len];
                     self.oversamplers[channel].process_channel(
                         &self.dry[..frames],
                         &mut self.wet_buf[..frames],
                         scratch,
-                        |x| shape(x * grain) * comp,
+                        |x| shape(x * grain),
                     )
                 } else {
                     0
@@ -423,13 +429,13 @@ impl EffectProcessor for MultimodeFilter {
                     // emitting a short or silent block.
                     for index in 0..frames {
                         let sample = self.dry[index];
-                        self.wet_buf[index] = shape(sample * grain) * comp;
+                        self.wet_buf[index] = shape(sample * grain);
                     }
                 }
+                crate::effects::util::simd::scale_in_place(&mut self.wet_buf[..frames], drive_comp);
             } else {
                 self.wet_buf[..frames].copy_from_slice(&self.dry[..frames]);
             }
-
             // ── Filter ──
             for sample in self.wet_buf[..frames].iter_mut() {
                 *sample = self.channels[channel].filter.process(*sample);

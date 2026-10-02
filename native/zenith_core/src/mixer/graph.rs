@@ -441,9 +441,7 @@ impl MixerGraph {
     pub fn silence_all(&mut self) {
         for node in &mut self.nodes {
             if node.alive {
-                for s in &mut node.buffer {
-                    *s = 0.0;
-                }
+                node.buffer.fill(0.0);
             }
         }
     }
@@ -934,9 +932,7 @@ mod tests {
         let a = g.add_channel().expect("capacity");
         {
             let node = g.node_mut(a).expect("live");
-            for s in &mut node.buffer {
-                *s = 1.0;
-            }
+            node.buffer.fill(1.0);
         }
         g.silence_all();
         let node = g.node(a).expect("live");

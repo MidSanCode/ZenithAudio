@@ -699,7 +699,8 @@ mod tests {
 
     #[test]
     fn there_are_at_least_seven_bands() {
-        assert!(BAND_COUNT >= 7, "PLAN §1.3 requires at least seven bands");
+        // Compile-time constant, so the requirement is checked at compile time.
+        const { assert!(BAND_COUNT >= 7, "PLAN section 1.3 requires at least seven bands") };
     }
 
     #[test]

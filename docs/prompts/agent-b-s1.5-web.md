@@ -9,68 +9,66 @@
 工作目录：`F:\exeliang\zenith_audio`
 
 **必读**
-1. `docs/PLAN_DAW_PARITY.md` — §0.2 硬性约束、§3 的 S1.5 全节、§3 的 S1（了解驱动抽象）
-2. `docs/ABI.md` — C ABI 契约
-3. `lib/engine/engine.dart`、`lib/services/audio_service_web.dart`
+1. `docs/PLAN_DAW_PARITY.md` — §0.2 硬性约束、§3 的 S1.5 全节、§3 的 S1.1（了解驱动抽象）
+2. `docs/ABI.md` — C ABI 契约（尤其 P7 WASM 硬约束）
+3. `lib/engine/engine.dart`、`lib/engine/audio_engine_adapter.dart`
 
-## 依赖与前置
+**当前状态（已核实，2026-10-04）**
+- S2/S3(Rust)/S5(大部) 已完成；S1.1 **未开工**——`src/driver/` 尚不存在，
+  `AudioDriver` trait 还没被定义。
+- ABI_VERSION = 0.4.0。
+- `cargo check --target wasm32-unknown-unknown` 当前通过（核心尚无平台依赖）。
 
-你依赖 Agent-A 的 S1 完成 `AudioDriver` trait 抽象。开工前先确认
-`native/zenith_core/src/driver/mod.rs` 里的 `AudioDriver` trait 已存在。
+## 依赖与开工顺序
 
-若 S1 尚未落地，你可以先做**不依赖它**的部分：
-- WASM 构建流水线（`cargo build --target wasm32-unknown-unknown` + `wasm-bindgen`）
-- AudioWorklet 的 JS 侧骨架
-- 卡顿检测的 UI 警告条组件（纯 Dart，可独立完成）
+`AudioDriver` trait 由 Agent-A 在 S1.1 中定义，**那是它的所有权，不要替它定义**。
 
-但**不要自己改 `AudioDriver` trait**——那是 Agent-A 的所有权。
+因此你的工作分两段：
 
-## 任务
+**第一段（现在就能做，不依赖 Agent-A）**
+1. WASM 构建流水线：`cargo build --target wasm32-unknown-unknown` + `wasm-bindgen`
+   的脚本化与 CI 接入（`.github/workflows/build.yml` 的 web job 需补
+   `rustup target add wasm32-unknown-unknown`）
+2. AudioWorklet 的 JS 侧骨架：`web/worklet.js`（或 assets 注入）、
+   `lib/engine/web/worklet_bridge.dart` 的 postMessage 协议设计
+3. **卡顿检测与降级 UI（纯 Dart，可独立完成并测试）**：
+   - `web_degradation_provider`（L0/L1/L2 状态机）
+   - 页面顶部持久警告条组件：不可自动消失、必须用户确认、
+     提供「仍要启用」与「降低采样率/增大缓冲」快捷操作
+   - 被停用功能的置灰 + 原因提示机制
+4. 监控指标协议设计：xrun 计数器、实时率（DSP 耗时/可用时间）的上报格式——
+   与 Agent-A 约定好，让它在 `worklet_driver.rs` 里按此实现
 
-按 `PLAN` §3 S1.5：
+**第二段（等 S1.1 落地后）**
+5. `worklet_driver.rs` 按约定的 trait 实现回调驱动
+6. 端到端联调 + 降级实测
 
-1. **Web 复用同一份 Rust 核心**，编译为 WASM，经 AudioWorklet 驱动。
-   （`cpal` 在 `wasm32` 上不可用，这正是 Web 必须走独立驱动的原因。）
+## 三级降级（规格不变）
 
-2. **三级自动降级**
-   | 等级 | 触发条件 | 行为 |
-   |---|---|---|
-   | L0 完整 | 实时率 < 60%，无 xrun | 全部功能可用 |
-   | L1 减负 | 实时率 60–85% 或偶发 xrun | 停用卷积混响、过采样失真、高倍率时间拉伸；降低调制器更新率 |
-   | L2 精简 | 实时率 > 85% 或持续 xrun | 停用所有发送/返回总线与实时效果链（转离线烘焙），复音上限降至 32 |
+| 等级 | 触发条件 | 行为 |
+|---|---|---|
+| L0 完整 | 实时率 < 60%，无 xrun | 全部功能可用 |
+| L1 减负 | 60–85% 或偶发 xrun | 停用卷积混响、过采样失真、高倍率时间拉伸；降低调制器更新率 |
+| L2 精简 | > 85% 或持续 xrun | 停用发送/返回总线与实时效果链（转离线烘焙），复音上限 32 |
 
-3. **检测逻辑**：Rust 侧只写 xrun 计数器与实时率原子量，**判断绝不在音频回调内做**；
-   Dart 侧每秒轮询一次（Web 经 Worklet `postMessage` 回传）。
-
-4. **UI**：触发阈值时在页面顶部显示**持久警告条**。要求：
-   - 警告**不可自动消失**，必须用户确认
-   - 提供「仍要启用」按钮（强制覆盖但保留警告）
-   - 提供「降低采样率 / 增大缓冲」快捷操作
-   - 被停用的功能在所有 UI 面板上**置灰并附原因提示**
-   - 状态经 `web_degradation_provider` 暴露，供所有面板订阅
-
-5. **降级可逆**：性能恢复（连续 10 秒 L0 水平）后可回升一级，但需用户确认。
-
-6. 桌面/移动端**同样具备这套监控**，只是默认不触发降级。
+- 判断**绝不在音频回调内做**（Rust 侧只写原子计数器）
+- 降级可逆：连续 10 秒 L0 水平可回升一级，但需用户确认
+- 桌面/移动同样具备监控，只是默认不触发
 
 ## 硬性约束
 
 - **不引入第三方 DAW 品牌名**（含 UI 文案）
 - Rust 核心不得依赖 `std::thread` / `std::fs` / `std::time::Instant`
-  （除 `cfg(not(target_arch = "wasm32"))` 保护的部分）
-- 改 `driver/worklet_driver.rs` 与 `lib.rs` 前，先在 `docs/COORDINATION.md` 登记
-- 四项全绿：
-  ```
-  cargo clippy --all-targets -- -D warnings
-  cargo test
-  flutter analyze      # 0 error
-  flutter test
-  ```
+  （除 `cfg(not(target_arch = "wasm32"))` 保护）
+- 改 `src/lib.rs` / `Cargo.toml` / `src/ffi/` 前先在 `docs/COORDINATION.md` 登记
+- effects 文件保持纯 ASCII；只用 write/edit 工具改源码
+- 四项全绿：`cargo clippy --all-targets -- -D warnings`、`cargo test`、
+  `flutter analyze`（0 error，本机慢建议后台跑）、`flutter test`
 
 ## 验收
 
-- 低配浏览器上人为制造负载，警告条正确出现、重型渲染被停用、**音频不中断**
-- 点「仍要启用」后功能恢复且警告保留
-- Web 与桌面播放同一工程，在 L0 下音质一致（容差 < -90dBFS）
+- 低配浏览器人为制造负载：警告条出现、重型渲染停用、音频不中断
+- 「仍要启用」后功能恢复且警告保留
+- Web 与桌面同一工程 L0 下音质一致（容差 < -90dBFS）
 
-完成后交付 `docs/stages/s1.5-report.md` 并更新 `PLAN` §6 进度表。
+完成后交付 `docs/stages/s1.5-report.md`，更新 `PLAN` §6 进度表。

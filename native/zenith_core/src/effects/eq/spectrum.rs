@@ -292,11 +292,26 @@ impl SpectrumAnalyser {
     fn analyse(&mut self) {
         // Window the most recent `FFT_SIZE` samples, split around the write
         // cursor so the newest sample is last.
-        for n in 0..FFT_SIZE {
-            let index = (self.write + n) % FFT_SIZE;
-            self.re[n] = self.ring[index] * self.window[n];
-            self.im[n] = 0.0;
-        }
+        //
+        // The ring wraps at `write`, so the logical window `[write .. write +
+        // FFT_SIZE)` is two contiguous runs in the physical buffer, and each is
+        // a plain element-wise multiply of ring against window. Splitting it
+        // that way lets the SIMD kernel do the work - the plan names EQ as a
+        // hotspot - instead of one modulo-indexed scalar loop. The imaginary
+        // half is cleared with a fill.
+        let split = self.write;
+        let tail = FFT_SIZE - split;
+        crate::effects::util::simd::mul_into(
+            &mut self.re[..tail],
+            &self.ring[split..],
+            &self.window[..tail],
+        );
+        crate::effects::util::simd::mul_into(
+            &mut self.re[tail..],
+            &self.ring[..split],
+            &self.window[tail..],
+        );
+        self.im.iter_mut().for_each(|sample| *sample = 0.0);
         self.transform();
 
         // Normalise so a full-scale sine reads as 0 dB.
