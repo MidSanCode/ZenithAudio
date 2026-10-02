@@ -161,3 +161,33 @@ Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读�
 - 力度**画笔**（在卷帘里按 y 位置拖动写力度）与**幽灵音符/音阶高亮**：需要卷帘画笔交互，属后续。
 - 摇摆/量化目前作用于**整轨**；范围选择（`notesInRange` 已就位）接入 UI 属后续。
 
+---
+
+## 8. 增补（2026-10-06，Agent-A）：S6a Pattern/Playlist provider 接线
+
+### 8.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/providers/project_arrangement.dart` | **新增** `_ProjectArrangementMixin`：把 `PlaylistEngine` 的纯代数接到工程状态，每次用户动作一条 undo。方法：`addPattern` / `removePattern` / `renamePattern` / `updatePatternNotes` / `placePattern` / `movePlaylistItem` / `removePlaylistItem` / `clonePattern(linked\|unique)` / `flattenArrangement`。 |
+| `lib/providers/project_undo.dart` | `_isDirty` 与 `_markDirty` 从类体移入 `_ProjectHistoryMixin`——mixin 的 `this` 是它的 `on` 类型，类体私有成员对其兄弟 mixin 不可见。arrangement mixin 由此可 `on _ProjectHistoryMixin`。 |
+| `test/playlist_engine_test.dart` | **11 项**：linked/unique 克隆、placement 增删移（网格吸附/负值钳制）、块比样式长时重复/短时截断、移调钳制、`fromTracks` 迁移等价与 `flattenTrack` 还原、`pruneUnused`、`uniqueId`。 |
+
+### 8.2 惰性迁移
+
+旧工程没有 `patterns`/`playlist`（音符直接挂在轨道上）。第一次编排编辑会经
+`_ensureArrangement()` 调 `PlaylistEngine.fromTracks(...)` 就地播种，用户无需先「转换」
+工程即可编排。这是 S6a「旧工程迁移为等价结构」的落地。
+
+### 8.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/playlist_engine_test.dart` | ✅ **11 passed** |
+| `flutter test`（全仓） | ✅ **299 passed**（+11），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 8.4 仍缺
+
+- **编排视图 UI**（Playlist 块拖拽摆放）：provider 与 `PlaylistEngine` 均已就位，缺画布/拖拽交互，属后续。
+

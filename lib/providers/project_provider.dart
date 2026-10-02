@@ -12,7 +12,9 @@ import '../models/project.dart';
 import '../models/track.dart';
 import '../models/note.dart';
 import '../models/pattern.dart';
+import '../models/playlist.dart';
 import '../models/musical_time.dart';
+import '../services/playlist_engine.dart';
 import '../models/instrument.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
@@ -31,12 +33,14 @@ import 'settings_provider.dart';
 
 part 'project_undo.dart';
 part 'project_io.dart';
+part 'project_arrangement.dart';
 
 final projectProvider = NotifierProvider<ProjectNotifier, Project>(
   ProjectNotifier.new,
 );
 
-class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
+class ProjectNotifier extends Notifier<Project>
+    with _ProjectHistoryMixin, _ProjectArrangementMixin {
   static const _uuid = Uuid();
 
   /// Current project directory inside the workspace (set after first save or
@@ -46,9 +50,6 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
   /// LGDF identity of the loaded project, so a re-save keeps its created time
   /// and version.
   LgdfProjectInfo? _lgdfInfo;
-
-  /// Tracks whether there are unsaved changes.
-  bool _isDirty = false;
 
   /// Auto-save timer.
   Timer? _autoSaveTimer;
@@ -105,8 +106,6 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
     WidgetsBinding.instance.addPostFrameCallback((_) => startAutoSave());
     return Project(id: _uuid.v4(), name: 'untitled');
   }
-
-  void _markDirty() => _isDirty = true;
 
   /// Check for an auto-save cache on startup and offer recovery.
   ///
