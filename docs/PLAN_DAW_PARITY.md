@@ -852,7 +852,7 @@ lib/plugins/
 | S5 效果器套件 | ✅ **已完成**（Rust + Dart 门禁均已取得） | Agent-C | 2026-10-06 | 16 个内置效果（EQ 参数/频谱、压缩/限制/门、算法/卷积混响、同步延迟、合唱/镶边/移相、饱和/位粉碎、多模滤波）+ `effects/util` 统一过采样与 **cfg 分平台 SIMD**（aarch64 NEON / wasm32 simd128 / 标量回退）+ `ffi/effect_api.rs`（16 个 `zenith_effect_*` 导出），`ABI_VERSION` → `0.4.0`。`cargo test` **866 passed / 0 failed**、`cargo clippy --all-targets -- -D warnings` **exit 0**、`cargo check --target wasm32-unknown-unknown` **exit 0**。**Dart 门禁本次补齐**：`flutter analyze` **0 error**、`flutter test` **190 passed**（唯一失败为 Windows 专属 `registry_quoting_test.dart`，与本改动无关）。效果 DSP 已由 S1 的 `EffectRack` 接线。见 `docs/stages/s5-report.md` 与 `COORDINATION` C-011 |
 | S6 编曲/卷帘/MIDI | 🟡 进行中（模型层 + **SMF 导入/导出** + **卷帘编辑工具**已落地） | Agent-E | 2026-10-06 | 模型层已落地（`musical_time`/`pattern`/`playlist`）；**S6c 自包含部分完成**：`lib/services/midi/{smf_types,smf_reader,smf_writer}.dart`（SMF 0/1 全函数读写、PPQ 重标定、SMPTE 拒绝）+ `midi_file_service.dart` + provider 的 `import/exportMidi*` + 菜单占位替换。**S6b 编辑工具完成**：`note_edit_ops.dart`（量化强度/摇摆/力度斜坡/随机/压缩扩展/移调）+ 卷帘「音符工具」面板。**Dart 门禁：SMF 20 项 + note_edit_ops 23 项全绿、`flutter analyze` 0 error、全仓 `flutter test` 243 passed**（唯一失败为 Windows 专属 reg 测试）。仍缺：编排视图 UI、力度画笔与幽灵音符 UI、MIDI 外部输入。见 `docs/stages/s6-report.md` §6/§7 |
 | S7 插件宿主 | ⬜ 未开始 | Agent-D | — | 桌面限定 |
-| S8 音频编辑 | ⬜ 未开始 | Agent-F | — | |
+| S8 音频编辑 | 🟡 **算法层已完成**（拉伸/变调/瞬态/交叉淡化）；FFI 与 Dart UI 待做 | Agent-A | 2026-10-06 | `src/edit/{time_stretch,transient,crossfade}.rs`：WSOLA 拉伸、变调（重采样+拉伸）、瞬态检测（能量 vs 局部中位数）、等功率/线性交叉淡化、`slice_at`。纯函数、可脱离引擎测试。**1012 Rust 测试全绿（+24）/ clippy exit 0 / wasm32 通过**。未做：FFI 导出、非破坏性片段编辑模型、波形编辑器、瞬态→音符映射。见 `docs/stages/s8-report.md` 与 `COORDINATION` C-015 |
 | S9 收尾 | ⬜ 未开始 | Agent-F | — | |
 
 **图例**：⬜ 未开始 · 🟡 进行中 · ✅ 已完成 · ⛔ 阻塞

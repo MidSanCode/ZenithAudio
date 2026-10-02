@@ -47,6 +47,14 @@ pub mod effects;
 /// and its voices compose.
 pub mod dsp;
 
+/// Offline audio-editing algorithms (PLAN §3.S8): time stretch, pitch shift,
+/// transient detection and crossfading.
+///
+/// Buffer-in/buffer-out transforms the audio editor calls; **not** on the audio
+/// path, so they may allocate. See `docs/COORDINATION.md` C-015 for the
+/// registration of this module.
+pub mod edit;
+
 /// The real-time audio engine (PLAN §3.S1).
 ///
 /// Composes [`transport`], [`voice`], [`mixer`] and [`automation`] into the

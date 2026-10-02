@@ -281,4 +281,19 @@
 | **回滚方式** | `git revert`；均为纯追加，可单独回退 S4 段。 |
 | **状态** | 🟢 已生效（门禁见 `docs/stages/s4-report.md`） |
 
+---
+
+### C-015 · 注册 `src/edit/**` 所有权（S8，无 ABI 变更）
+
+| 项 | 内容 |
+|---|---|
+| **日期** | 2026-10-06 |
+| **登记人** | Agent-A（S8） |
+| **变更（自有目录）** | 新增 `native/zenith_core/src/edit/**`（`mod` / `time_stretch` / `transient` / `crossfade`），并在 `src/lib.rs` 增加 `pub mod edit;`。**不涉及任何 ABI 变更**（`ABI_VERSION` 仍为 `0.6.0`），因为该模块目前只暴露 crate 内 API，供后续 FFI 包装。 |
+| **理由** | PLAN §3.S8 的算法层「是独立的纯函数（Float32 数组进、Float32 数组出），可以脱离引擎先实现并配单元测试」——正是本轮所做。 |
+| **范围** | 时间拉伸（WSOLA）、变调（重采样+拉伸）、瞬态检测、交叉淡化。均为 `&[f32] → Vec<f32>`，可分配、非实时路径。 |
+| **影响面** | 仅 `src/lib.rs` 追加一行 `pub mod edit;`。不改动其他 agent 目录。 |
+| **回滚方式** | `git revert`；删除 `src/edit/**` 与 `lib.rs` 一行即可。 |
+| **状态** | 🟢 已生效 |
+
 
