@@ -191,3 +191,30 @@ Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读�
 
 - **编排视图 UI**（Playlist 块拖拽摆放）：provider 与 `PlaylistEngine` 均已就位，缺画布/拖拽交互，属后续。
 
+---
+
+## 9. 增补（2026-10-06，Agent-A）：S6a 编排视图
+
+### 9.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/widgets/editor/arrangement_geometry.dart` | **纯几何**：`tickToX`/`xToTick`、`laneToY`/`yToLane`、`itemRect`、`hitTest`、`snapArrangementTick`。命中测试**后绘制的块优先**（与绘制顺序一致，点到的就是看到的）。 |
+| `lib/widgets/editor/arrangement_view.dart` | 编排屏幕：左侧样式面板 + 时间轴画布。点击样式在 tick 0 放置块；拖动块移动（吸附到一拍）；AppBar 有「铺回轨道」。 |
+| `lib/widgets/toolbar/menu_bar.dart` | View 菜单新增「编排视图」。 |
+| `test/arrangement_geometry_test.dart` | **16 项**。 |
+
+### 9.2 实现中修掉的真实缺陷
+
+**水平滚动按错误速率**：`tickToX` 原先把 `scrollTicks`（一个 tick 数）直接当像素减，
+只有 `pixelsPerTick == 1` 时才正确；缩放为 0.1 px/tick 时滚动速度差 10 倍。改为
+`(tick - scrollTicks) * pixelsPerTick`。测试 `honours the tick scroll` 钉住。
+
+### 9.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test test/arrangement_geometry_test.dart` | ✅ **16 passed** |
+| `flutter test`（全仓） | ✅ **315 passed**（+16），10 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+

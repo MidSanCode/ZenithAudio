@@ -40,6 +40,7 @@
   "menu.view.zoomOut": "Zoom Out",
   "menu.view.fitWindow": "Fit Window",
   "menu.view.abCompare": "A/B Compare",
+  "menu.view.arrangement": "Arrangement",
 
   "menu.help": "Help",
   "menu.help.about": "About",
@@ -229,6 +230,12 @@
   "ab.label": "A/B",
   "ab.copyToOther": "Copy to other",
   "ab.exit": "Exit A/B",
+
+  "arrangement.title": "Arrangement",
+  "arrangement.patterns": "Patterns",
+  "arrangement.newPattern": "New pattern",
+  "arrangement.empty": "No patterns yet.\nAdd one to start arranging.",
+  "arrangement.flatten": "Flatten to tracks",
 
   "common.ok": "OK",
 

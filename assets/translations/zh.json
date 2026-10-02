@@ -41,6 +41,7 @@
   "menu.view.zoomOut": "缩小",
   "menu.view.fitWindow": "适应窗口",
   "menu.view.abCompare": "A/B 对比",
+  "menu.view.arrangement": "编排视图",
 
   "menu.help": "帮助",
   "menu.help.about": "关于 卓声",
@@ -230,6 +231,12 @@
   "ab.label": "A/B",
   "ab.copyToOther": "复制到另一侧",
   "ab.exit": "退出 A/B",
+
+  "arrangement.title": "编排视图",
+  "arrangement.patterns": "样式",
+  "arrangement.newPattern": "新建样式",
+  "arrangement.empty": "还没有样式。\n新建一个即可开始编排。",
+  "arrangement.flatten": "铺回轨道",
 
   "common.ok": "确定",
 

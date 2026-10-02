@@ -8,6 +8,7 @@ import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/ab_compare_provider.dart';
 import '../editor/synth_editor_dialog.dart' show SynthEditorLauncher;
+import '../editor/arrangement_view.dart';
 import '../../services/file_service.dart';
 import '../../services/midi/smf_types.dart';
 import '../dialogs/project_migration_dialog.dart';
@@ -252,6 +253,12 @@ class AudioMenuBar extends ConsumerWidget {
               ),
               MenuItem(label: 'menu.view.fitWindow'.tr()),
               const MenuItem.separator(),
+              MenuItem(
+                label: 'menu.view.arrangement'.tr(),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ArrangementView()),
+                ),
+              ),
               MenuItem(
                 label: 'menu.view.abCompare'.tr(),
                 shortcut: 'Shift+Tab',
