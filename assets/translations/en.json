@@ -26,8 +26,7 @@
   "menu.track.importMidiDone": "Imported {n} MIDI track(s)",
   "menu.track.importMidiEmpty": "The MIDI file had no playable notes",
   "menu.track.importMidiFailed": "Could not import MIDI: {reason}",
-  "menu.track.exportMidiDone": "Exported MIDI",
-  "menu.track.addInstrument": "Add Instrument",
+  "menu.track.exportMidiDone": "Exported MIDI",  "menu.track.addInstrument": "Add Instrument",
   "menu.track.addSynth": "Add Synth",
   "menu.track.chooseTemplate": "Choose Template",
   "menu.track.comingSoon": "Coming Soon",
@@ -190,6 +189,16 @@
   "songInfo.deviceCount": "Available Devices",
 
   "pianoRoll.chordTool": "Chords",
+  "pianoRoll.noteTools": "Note Tools",
+  "pianoRoll.quantizeStrength": "Quantize",
+  "pianoRoll.swing": "Swing",
+  "pianoRoll.velocityRamp": "Velocity Ramp",
+  "pianoRoll.velocityRandom": "Randomize Velocity",
+  "pianoRoll.velocityScale": "Compress / Expand",
+  "pianoRoll.transpose": "Transpose",
+  "pianoRoll.apply": "Apply",
+  "pianoRoll.from": "From",
+  "pianoRoll.toolApplied": "{tool} applied to {n} note(s)",
 
   "menu.wavOnly": "Only WAV files are supported. Convert other formats to WAV first.",
 

@@ -131,3 +131,33 @@ Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读�
   仍未做；模型层与 `playlist_engine` 已就位。
 - 本轮**未**触碰 `models/project.dart` / `lgdf_project_codec.dart` 的序列化面。
 
+---
+
+## 7. 增补（2026-10-06，Agent-A）：S6b 卷帘编辑工具
+
+### 7.1 交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/services/note_edit_ops.dart` | **纯函数**音符变换：`quantizeStarts`（含强度 0–1）、`swing`（off-beat 位移、保留离网偏移）、`velocityRamp`（按起始排序插值）、`velocityRandomize`（可注入 RNG）、`velocityScale`（压缩/扩展）、`transpose`、`notesInRange`。全部基于 **tick**，不依赖任何 widget/provider/引擎。 |
+| `lib/widgets/editor/piano_roll_editor.dart` | 新增「音符工具」chip → `_NoteToolsSheet` 底部面板：量化强度、摇摆、力度斜坡/随机/压缩扩展、移调（±1/±12）。每次应用是**一次** undo（整段提交），并即时刷新播放。 |
+| `assets/translations/{en,zh}.json` | 11 个新键。 |
+| `test/note_edit_ops_test.dart` | **23 项**。 |
+
+### 7.2 为什么「摇摆」不是量化
+
+摇摆把**奇数网格步**整体后移 `amount × grid/3`，并**保留音符相对该网格线的原有偏移**。若直接 `snap` 到网格再摇摆，会把一个有 groove 的演奏压平。测试 `an off-grid note keeps its offset from the swung grid line` 钉住这一点。
+
+### 7.3 门禁实测
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter test test/note_edit_ops_test.dart` | ✅ **23 passed** |
+| `flutter analyze` | ✅ **0 error** |
+| `flutter test`（全仓） | ✅ **243 passed**（+23），8 skipped（FFI 需 dylib），唯一失败为 Windows 专属 `registry_quoting_test.dart` |
+
+### 7.4 仍缺
+
+- 力度**画笔**（在卷帘里按 y 位置拖动写力度）与**幽灵音符/音阶高亮**：需要卷帘画笔交互，属后续。
+- 摇摆/量化目前作用于**整轨**；范围选择（`notesInRange` 已就位）接入 UI 属后续。
+

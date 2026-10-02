@@ -190,6 +190,16 @@
   "songInfo.deviceCount": "可用设备数",
 
   "pianoRoll.chordTool": "和弦",
+  "pianoRoll.noteTools": "音符工具",
+  "pianoRoll.quantizeStrength": "量化",
+  "pianoRoll.swing": "摇摆",
+  "pianoRoll.velocityRamp": "力度斜坡",
+  "pianoRoll.velocityRandom": "力度随机",
+  "pianoRoll.velocityScale": "压缩 / 扩展",
+  "pianoRoll.transpose": "移调",
+  "pianoRoll.apply": "应用",
+  "pianoRoll.from": "起始",
+  "pianoRoll.toolApplied": "已对 {n} 个音符应用{tool}",
 
   "menu.wavOnly": "仅支持 WAV 格式。如需导入其他格式，请先转换为 WAV。",
 

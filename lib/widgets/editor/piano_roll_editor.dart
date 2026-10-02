@@ -16,6 +16,8 @@ import '../../providers/project_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/synth_service.dart';
+import '../../services/note_edit_ops.dart';
+import '../../models/musical_time.dart';
 import '../../engine/audio_engine_adapter.dart';
 import '../../widgets/editor/chord_generator_dialog.dart';
 import '../../core/constants/app_constants.dart';
@@ -221,6 +223,12 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
           ),
           const SizedBox(width: 4),
           _ToolChip(
+            icon: Icons.auto_fix_high,
+            label: 'pianoRoll.noteTools'.tr(),
+            onTap: () => _openNoteTools(settings),
+          ),
+          const SizedBox(width: 4),
+          _ToolChip(
             icon: settings.snapToGrid ? Icons.grid_on : Icons.grid_off,
             label: settings.snapToGrid ? 'Snap ON' : 'Snap OFF',
             onTap: () => ref.read(settingsProvider.notifier).setSnapToGrid(!settings.snapToGrid),
@@ -314,6 +322,93 @@ class _PianoRollEditorState extends ConsumerState<PianoRollEditor> {
   }
 
   List<Note>? _lastGeneratedChordNotes;
+
+  /// Grid length in ticks for the current snap resolution.
+  int get _gridTicks {
+    final resolution = ref.read(settingsProvider).gridResolution;
+    // resolution is a fraction of a beat (1, 0.5, 0.25, 0.125); a beat is one
+    // quarter note = Ticks.ppq.
+    return (Ticks.ppq * resolution).round().clamp(1, Ticks.ppq);
+  }
+
+  /// Opens the note-tools sheet: quantise, swing, velocity and transpose.
+  ///
+  /// Each action transforms the whole track's notes through [NoteEditOps] and
+  /// commits once, so a single gesture is one undo step rather than one per
+  /// note.
+  void _openNoteTools(SettingsState settings) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) => _NoteToolsSheet(
+        gridTicks: _gridTicks,
+        onQuantize: (strength) => _applyNoteEdit(
+          (notes) => NoteEditOps.quantizeStarts(
+            notes,
+            gridTicks: _gridTicks,
+            strength: strength,
+          ),
+          label: 'quantize',
+        ),
+        onSwing: (amount) => _applyNoteEdit(
+          (notes) => NoteEditOps.swing(
+            notes,
+            gridTicks: _gridTicks,
+            amount: amount,
+          ),
+          label: 'swing',
+        ),
+        onVelocityRamp: (from, to) => _applyNoteEdit(
+          (notes) => NoteEditOps.velocityRamp(notes, from: from, to: to),
+          label: 'velocity ramp',
+        ),
+        onVelocityRandomize: (range) => _applyNoteEdit(
+          (notes) => NoteEditOps.velocityRandomize(notes, range: range),
+          label: 'velocity randomize',
+        ),
+        onVelocityScale: (factor) => _applyNoteEdit(
+          (notes) => NoteEditOps.velocityScale(notes, factor: factor),
+          label: 'velocity scale',
+        ),
+        onTranspose: (semitones) => _applyNoteEdit(
+          (notes) => NoteEditOps.transpose(notes, semitones),
+          label: 'transpose',
+        ),
+      ),
+    );
+  }
+
+  /// Applies [transform] to the track's notes and commits the result.
+  ///
+  /// Re-reads the latest track before transforming, so an edit made while a
+  /// sheet was open is not lost. Commits through the provider, which pushes an
+  /// undo entry, and refreshes playback so the change is audible immediately.
+  void _applyNoteEdit(
+    NoteEditResult Function(List<Note>) transform, {
+    required String label,
+  }) {
+    final latest = ref
+        .read(projectProvider)
+        .tracks
+        .where((t) => t.id == widget.trackId)
+        .firstOrNull;
+    if (latest == null || latest.notes.isEmpty) return;
+    final result = transform(latest.notes);
+    if (result.isUnchanged) return;
+    ref.read(projectProvider.notifier).updateTrackNotes(widget.trackId, result.notes);
+    ref.read(playbackProvider.notifier).refreshTrackAudio(widget.trackId);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('pianoRoll.toolApplied'.tr(namedArgs: {
+            'tool': label,
+            'n': '${result.changed}',
+          })),
+          duration: const Duration(milliseconds: 900),
+        ),
+      );
+    }
+  }
 
   double _firstNoteStartOrZero(List<Note> notes) => notes.isEmpty
       ? 0.0
@@ -1128,4 +1223,183 @@ class _PianoRollEditorPainter extends CustomPainter {
       oldDelegate.ghostRects != ghostRects ||
       oldDelegate.playPos != playPos ||
       oldDelegate.selectionRect != selectionRect;
+}
+
+/// The note-tools bottom sheet: quantise, swing, velocity and transpose.
+///
+/// A self-contained widget so the piano-roll state stays focused on editing.
+/// Each control calls back into the editor, which commits the transform through
+/// the provider as a single undoable step.
+class _NoteToolsSheet extends StatefulWidget {
+  const _NoteToolsSheet({
+    required this.gridTicks,
+    required this.onQuantize,
+    required this.onSwing,
+    required this.onVelocityRamp,
+    required this.onVelocityRandomize,
+    required this.onVelocityScale,
+    required this.onTranspose,
+  });
+
+  final int gridTicks;
+  final void Function(double strength) onQuantize;
+  final void Function(double amount) onSwing;
+  final void Function(int from, int to) onVelocityRamp;
+  final void Function(int range) onVelocityRandomize;
+  final void Function(double factor) onVelocityScale;
+  final void Function(int semitones) onTranspose;
+
+  @override
+  State<_NoteToolsSheet> createState() => _NoteToolsSheetState();
+}
+
+class _NoteToolsSheetState extends State<_NoteToolsSheet> {
+  double _quantizeStrength = 1.0;
+  double _swing = 0.0;
+  double _rampFrom = 40;
+  double _rampTo = 120;
+  double _randomRange = 10;
+  double _scaleFactor = 0.5;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('pianoRoll.noteTools'.tr(),
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+
+            // ── Quantise ──
+            _sliderRow(
+              cs,
+              label: '${'pianoRoll.quantizeStrength'.tr()} '
+                  '${(_quantizeStrength * 100).round()}%',
+              value: _quantizeStrength,
+              onChanged: (v) => setState(() => _quantizeStrength = v),
+              action: 'pianoRoll.apply'.tr(),
+              onAction: () => widget.onQuantize(_quantizeStrength),
+            ),
+
+            // ── Swing ──
+            _sliderRow(
+              cs,
+              label: '${'pianoRoll.swing'.tr()} ${(_swing * 100).round()}%',
+              value: _swing,
+              onChanged: (v) => setState(() => _swing = v),
+              action: 'pianoRoll.apply'.tr(),
+              onAction: () => widget.onSwing(_swing),
+            ),
+
+            // ── Velocity ramp ──
+            _sliderRow(
+              cs,
+              label: '${'pianoRoll.velocityRamp'.tr()} '
+                  '${_rampFrom.round()} → ${_rampTo.round()}',
+              value: _rampTo / 127,
+              onChanged: (v) => setState(() => _rampTo = (v * 127).roundToDouble()),
+              action: 'pianoRoll.apply'.tr(),
+              onAction: () => widget.onVelocityRamp(_rampFrom.round(), _rampTo.round()),
+              secondary: Row(
+                children: [
+                  Text('pianoRoll.from'.tr(), style: const TextStyle(fontSize: 11)),
+                  Expanded(
+                    child: Slider(
+                      value: _rampFrom / 127,
+                      onChanged: (v) =>
+                          setState(() => _rampFrom = (v * 127).roundToDouble()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Velocity randomize ──
+            _sliderRow(
+              cs,
+              label: '${'pianoRoll.velocityRandom'.tr()} ±${_randomRange.round()}',
+              value: _randomRange / 64,
+              onChanged: (v) => setState(() => _randomRange = (v * 64).roundToDouble()),
+              action: 'pianoRoll.apply'.tr(),
+              onAction: () => widget.onVelocityRandomize(_randomRange.round()),
+            ),
+
+            // ── Velocity compress / expand ──
+            _sliderRow(
+              cs,
+              label: '${'pianoRoll.velocityScale'.tr()} '
+                  'x${_scaleFactor.toStringAsFixed(2)}',
+              value: _scaleFactor / 2.0,
+              onChanged: (v) => setState(() => _scaleFactor = (v * 2.0)),
+              action: 'pianoRoll.apply'.tr(),
+              onAction: () => widget.onVelocityScale(_scaleFactor),
+            ),
+
+            const Divider(height: 28),
+
+            // ── Transpose ──
+            Row(
+              children: [
+                Text('pianoRoll.transpose'.tr(),
+                    style: const TextStyle(fontSize: 13)),
+                const Spacer(),
+                IconButton(
+                  tooltip: '-12',
+                  onPressed: () => widget.onTranspose(-12),
+                  icon: const Icon(Icons.keyboard_double_arrow_down, size: 18),
+                ),
+                IconButton(
+                  tooltip: '-1',
+                  onPressed: () => widget.onTranspose(-1),
+                  icon: const Icon(Icons.remove, size: 18),
+                ),
+                IconButton(
+                  tooltip: '+1',
+                  onPressed: () => widget.onTranspose(1),
+                  icon: const Icon(Icons.add, size: 18),
+                ),
+                IconButton(
+                  tooltip: '+12',
+                  onPressed: () => widget.onTranspose(12),
+                  icon: const Icon(Icons.keyboard_double_arrow_up, size: 18),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sliderRow(
+    ColorScheme cs, {
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+    required String action,
+    required VoidCallback onAction,
+    Widget? secondary,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
+              TextButton(onPressed: onAction, child: Text(action)),
+            ],
+          ),
+          Slider(value: value.clamp(0.0, 1.0), onChanged: onChanged),
+          ?secondary,
+        ],
+      ),
+    );
+  }
 }
