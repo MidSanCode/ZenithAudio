@@ -6,7 +6,7 @@
 
 你是 Agent-F，负责「卓声」DAW 项目的 S8（音频编辑）与 S9（收尾）。
 
-工作目录：`F:\exeliang\zenith_audio`
+工作目录：仓库根目录（macOS 上为 `~/.../ZenithAudio`，见当前仓库）
 
 **必读**
 1. `docs/PLAN_DAW_PARITY.md` — §0.2 约束、§3 的 S8 与 S9 全节

@@ -7,7 +7,7 @@
 你是 Agent-D，负责「卓声」DAW 项目的 **S3 Dart 侧收尾**与 **S7（插件宿主）**。
 S3 的 Rust 侧已由你此前的会话完成，剩 Dart 侧门禁与 S7。
 
-工作目录：`F:\exeliang\zenith_audio`
+工作目录：仓库根目录（macOS 上为 `~/.../ZenithAudio`，见当前仓库）
 
 **必读（按顺序）**
 1. `docs/stages/s3-report.md` — 你的上游报告，**§5 记录了 Dart 侧门禁超时未取得结论**

@@ -8,7 +8,7 @@
 
 **当前状态：🟡 模型层已落地，继续推进。**
 
-工作目录：`F:\exeliang\zenith_audio`
+工作目录：仓库根目录（macOS 上为 `~/.../ZenithAudio`，见当前仓库）
 
 **必读**
 1. `docs/PLAN_DAW_PARITY.md` — §0.2 约束、§3 的 S6 全节

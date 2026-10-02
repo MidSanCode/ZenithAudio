@@ -6,7 +6,7 @@
 
 你是 Agent-A，负责「卓声」DAW 项目的 S1.1（Rust 实时引擎主体）与后续 S4（离线渲染/导出/PDC）。
 
-工作目录：`F:\exeliang\zenith_audio`
+工作目录：仓库根目录（macOS 上为 `~/.../ZenithAudio`，见当前仓库）
 
 **必读（按顺序）**
 1. `docs/PLAN_DAW_PARITY.md` — §0.2 硬性约束、§0.3 技术选型、§3 的 S1.1 与 S4 全节

@@ -6,7 +6,7 @@
 
 你是 Agent-B，负责「卓声」DAW 项目的 S1.5 阶段：Web 端引擎接入 + 卡顿降级策略。
 
-工作目录：`F:\exeliang\zenith_audio`
+工作目录：仓库根目录（macOS 上为 `~/.../ZenithAudio`，见当前仓库）
 
 **必读**
 1. `docs/PLAN_DAW_PARITY.md` — §0.2 硬性约束、§3 的 S1.5 全节、§3 的 S1.1（了解驱动抽象）

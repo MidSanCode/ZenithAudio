@@ -7,56 +7,62 @@
 **C ABI 契约**：`docs/ABI.md`
 **S5 接手任务书**：`docs/stages/s5-handoff.md`
 
-> 状态快照：2026-10-04（提示词按此快照编写，开工前请对照 §6 进度表复核）
+> 状态快照：2026-10-06（开工前请对照 `docs/PLAN_DAW_PARITY.md` §6 进度表复核；
+> 下表已按最新进度更新）
 
 ---
 
-## 当前项目状态（已核实）
+## 当前项目状态（已核实，2026-10-06）
 
 | 阶段 | 状态 | 备注 |
 |---|---|---|
 | S0 基础重构 | ✅ | tag `s0-baseline` |
-| S1.0 前置项 A/B/C | ✅ | panic 修复 + 适配层 + 34 调用点迁移，122/122 |
-| S1.1 引擎主体 | ⬜ | `src/engine/`、`src/driver/` 不存在——**Agent-A 的任务** |
-| S1.5 Web 接入 | ⬜ | 第一段可先行（不依赖 S1.1） |
-| S2 参数/自动化 | ✅ | 316 Rust tests，门禁全绿，ABI 0.2.0 |
-| S3 混音器 | 🟡 | Rust 侧完成（149 tests，ABI 0.3.0）；**Dart 侧门禁未取得** |
-| S4 渲染/导出/PDC | ⬜ | 等 S1.1 |
-| S5 效果器套件 | 🟡 | 852/8 红；**8 个 distortion 红测 + clippy 8 项 + SIMD 未决** |
-| S6 编曲/卷帘/MIDI | 🟡 | 模型层落地；卷帘增强与 MIDI 未做 |
-| S7 插件宿主 | ⬜ | 等 S1.1（CLAP FFI 等独立部分可先行） |
-| S8 音频编辑 | ⬜ | **算法层零依赖可先行** |
-| S9 收尾 | ⬜ | 最后 |
+| S1 实时引擎 | ✅ | `src/{engine,driver,transport,dsp,voice}/` + `ffi/engine_api.rs`；`cpal` 为可选 feature，默认无设备驱动，ABI 0.5.0 |
+| S1.5 Web 接入 | 🟡 | 纯 Dart 降级策略/警告条/健康轮询已落地；worklet/WASM 流水线待做 |
+| S2 参数/自动化 | ✅ | ABI 0.2.0 |
+| S3 混音器 | ✅ | Dart 门禁已补齐，ABI 0.3.0 |
+| S4 渲染/导出/PDC | ✅ | 离线复用同一 `render_block`、PDC 相对对齐、WAV 导出，ABI 0.6.0 |
+| S5 效果器套件 | ✅ | 16 效果 + SIMD，Dart 门禁已补齐，ABI 0.4.0 |
+| S6 编曲/卷帘/MIDI | 🟡 | 模型 + SMF + 卷帘工具 + 编排视图 + 音阶/幽灵 view-model；力度画笔/外部 MIDI 输入待做 |
+| S7 插件宿主 | 🟡 | 槽位状态/序列化/搜索路径 + 工程持久化；CLAP FFI 加载器待做（需 SDK，桌面限定） |
+| S8 音频编辑 | 🟡 | 算法层 + FFI + Dart 绑定 + 非破坏性片段模型；编辑器 UI 待做，ABI 0.7.0 |
+| S9 收尾 | 🟡 | CI 守卫 + 迁移向导 + A/B + 文档 + 128 轨压测（实测 24.2%）；移除 media_kit 待做 |
 
-ABI 版本线性序列：S2 = 0.2.0 → S3 = 0.3.0 → S5 = 0.4.0 →（下一个新增）0.5.0
+ABI 版本线性序列：S2 = 0.2.0 → S3 = 0.3.0 → S5 = 0.4.0 → S1 = 0.5.0 → S4 = 0.6.0
+→ S8 = 0.7.0 →（下一个新增）**0.8.0**
+
+> **本机环境说明**：无 `cpal` 设备驱动（可选 feature，未安装外部依赖）；wasm32
+> 用系统既有 `/opt/homebrew/opt/rust-wasm` 配置；`provider` 仍走旧 `AudioService`。
 
 ---
 
 ## 文件清单与开工建议
 
-| 会话 | 文件 | 任务 | 可否立即开工 |
-|---|---|---|---|
-| **Agent-A** | [`agent-a-s1-s4.md`](agent-a-s1-s4.md) | S1.1 引擎主体 + S4 | ✅ **最优先**（所有人的图依赖它） |
-| **Agent-C** | [`agent-c-s2-s5.md`](agent-c-s2-s5.md) | S5 收尾（8 红测/clippy/SIMD） | ✅ **可立即**（与 S1.1 零冲突） |
-| **Agent-D** | [`agent-d-s3-s7.md`](agent-d-s3-s7.md) | S3 Dart 门禁 + S7 | ✅ S3 收尾可立即；S7 等 S1.1 |
-| **Agent-E** | [`agent-e-s6.md`](agent-e-s6.md) | S6 卷帘/MIDI | ✅ 可立即（模型层已就绪） |
-| **Agent-B** | [`agent-b-s1.5-web.md`](agent-b-s1.5-web.md) | S1.5 Web | 🟡 第一段可立即；第二段等 S1.1 |
-| **Agent-F** | [`agent-f-s8-s9.md`](agent-f-s8-s9.md) | S8 算法 + S9 | 🟡 算法层可立即；接线等 S1.1/S3 |
+> ⚠️ 下述启动提示词是**阶段性会话的历史快照**（编写于 2026-10-04，早于 S1–S9 的
+> 大幅推进）。它们仍描述了各自范围与硬性约束，但**「任务」与「可否立即开工」两列
+> 已过时**：其中 S1/S2/S3/S4/S5 的收尾均已完成，S6/S7/S8 只剩 UI/加载器部分。
+> **以 §6 进度表为准**；只有确实要重开某阶段剩余工作时才复制对应提示词。
+
+| 会话 | 文件 | 原始任务（历史） |
+|---|---|---|
+| **Agent-A** | [`agent-a-s1-s4.md`](agent-a-s1-s4.md) | S1.1 引擎主体 + S4 |
+| **Agent-C** | [`agent-c-s2-s5.md`](agent-c-s2-s5.md) | S2 + S5 效果器 |
+| **Agent-D** | [`agent-d-s3-s7.md`](agent-d-s3-s7.md) | S3 混音器 + S7 |
+| **Agent-E** | [`agent-e-s6.md`](agent-e-s6.md) | S6 卷帘/MIDI |
+| **Agent-B** | [`agent-b-s1.5-web.md`](agent-b-s1.5-web.md) | S1.5 Web |
+| **Agent-F** | [`agent-f-s8-s9.md`](agent-f-s8-s9.md) | S8 算法 + S9 |
 
 ---
 
-## 启动顺序建议
+## 当前剩余工作（2026-10-06）
 
-**不要一次放 6 个会话。** 建议：
-
-| 批次 | 启动 | 理由 |
+| 阶段 | 剩余项 | 阻塞 |
 |---|---|---|
-| **第 1 批** | **Agent-A（S1.1）+ Agent-C（S5 收尾）** | 两者目录完全隔离（engine//driver/ vs effects/）；A 是关键路径，C 的 8 个红测不修任何人都不该引用 effects |
-| **第 2 批** | Agent-E（S6）+ Agent-D（S3 Dart 收尾） | E 只动卷帘/MIDI 新文件；D 的 Dart 门禁是全项目第一次拿到可靠结论，越早越好 |
-| **第 3 批** | Agent-B（S1.5 第一段）+ Agent-F（S8 算法层） | 都是零依赖先行部分 |
-| **第 4 批** | 各会话的第二段（S7、worklet、S8 接线） | 等 S1.1 落地 |
-
-**每会话开工前必须确认其提示词里写的前置检查项。**
+| S1.5 | worklet 驱动 + WASM/wasm-bindgen 流水线 | 需 wasm-bindgen 产物 |
+| S6 | 力度画笔绘制接入、MIDI 外部键盘输入 | 交互 / `flutter_midi_command` |
+| S7 | CLAP FFI 加载器、插件 UI 嵌入、子进程沙箱 | 需 CLAP SDK（桌面） |
+| S8 | 波形编辑器 UI、瞬态→音符映射 UI | 交互 |
+| S9 | 移除 `media_kit` | 需引擎真正接线（无 `cpal` 设备驱动） |
 
 ---
 
@@ -72,8 +78,8 @@ ABI 版本线性序列：S2 = 0.2.0 → S3 = 0.3.0 → S5 = 0.4.0 →（下一�
    ```
 3. **不许**出现任何第三方 DAW 品牌名（代码/注释/文档/UI）
 4. 改 `src/lib.rs` / `Cargo.toml` / `src/ffi/` 前先在 `docs/COORDINATION.md` 登记
-5. ABI minor 是**全项目单一线性序列**：下一个新增导出用 0.5.0
-6. **只用 write/edit 工具改源码，绝不用 PowerShell 写文件**
+5. ABI minor 是**全项目单一线性序列**：下一个新增导出用 **0.8.0**
+6. **只用 write/edit 工具改源码，绝不用 shell 重定向写文件**
    （历史上毁过一个 80KB 文件的 UTF-8，不可逆）
 7. `effects/**` 等既有 Rust 文件保持纯 ASCII
 8. 完成后写 `docs/stages/sN-report.md` 并更新主计划 §6 进度表
