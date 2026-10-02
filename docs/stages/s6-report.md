@@ -94,3 +94,40 @@ ProcessException: Access denied (at ../../runtime/bin/process_win.cc:742)
 | Note 双表示漂移 | 秒视图在 tempo 变化后可能过期。缓解：`withTempo`，以及播放路径上的 `flatten` 一律走 tick。 |
 | 未验证代码 | 见 §3。合并前必须跑通 analyze + test。 |
 | `pubspec.yaml` 新增 MIDI 依赖 | `flutter_midi_command` 需联网解析，且各平台需原生权限配置；属于 S6c 的独立风险点。 |
+
+---
+
+## 6. 增补（2026-10-06，Agent-A）
+
+Flutter SDK 就绪后，本次推进了 S6c 的**自包含部分：SMF 0/1 读写**，并把
+`menu_bar.dart` 的 `'MIDI import not yet implemented'` 占位替换为真实实现。
+
+### 6.1 新增交付物
+
+| 文件 | 内容 |
+|---|---|
+| `lib/services/midi/smf_types.dart` | `SmfHeader` / `SmfTempo` / `SmfTimeSignature` / `SmfNote` / `SmfTrack` / `SmfFile` / `SmfFormatException` / `ByteCursor` / `encodeVarLen`。解析器是**全函数**：任何畸形输入抛带偏移的 `SmfFormatException`，不是 `RangeError`。 |
+| `lib/services/midi/smf_reader.dart` | `SmfReader.parse`（MThd/MTrk、变长增量、running status、速度/拍号/曲名 meta）与 `smfToPatterns`（把解析结果转成 tick 模型的一 Pattern/轨，并**把外来 PPQ 重标定到项目 PPQ=960**）。SMPTE division **明确拒绝**而非误读。 |
+| `lib/services/midi/smf_writer.dart` | `SmfWriter.write`：单 Pattern 出 format 0，多 Pattern 出 format 1（含 conductor 轨）；写速度/拍号 meta；`FF 2F` end-of-track。 |
+| `lib/services/midi_file_service.dart` | `MidiFileService`：`pickMidiFile`（读字节，跨 Web）、`saveMidiFile`。 |
+| `lib/providers/project_provider.dart` | 新增 `importMidiFile` / `importMidiBytes` / `exportMidiFile` / `exportMidiBytes`（就地写在类体内——`extension`/`mixin` 拿不到 Riverpod 的 protected `state`）。 |
+| `lib/widgets/toolbar/menu_bar.dart` | 导入/导出 MIDI 菜单项替换占位，带成功/失败 SnackBar。 |
+| `assets/translations/{en,zh}.json` | 5 个新键。 |
+| `test/smf_test.dart` + `test/midi_import_export_test.dart` | **20 项**：VLC 编解码、format 0/1 读写、变长量边界、running status、vel-0 note-off、PPQ 重标定、SMPTE 拒绝、往返保真。 |
+
+### 6.2 门禁实测（Dart）
+
+| 门禁 | 结果 |
+|---|---|
+| `flutter analyze` | ✅ **0 error**（104 项 info/warning 均为既有基线，新文件零告警） |
+| `flutter test test/smf_test.dart test/midi_import_export_test.dart` | ✅ **20 passed** |
+| `flutter test`（全仓） | ✅ **210 passed**（较上一版 +20；8 skipped 为 FFI 需先构建 dylib；唯一失败为 Windows 专属 `registry_quoting_test.dart`） |
+
+### 6.3 仍有意的缺口
+
+- **MIDI 输入（外部键盘）**：`flutter_midi_command` 需联网解析且各平台要原生
+  权限配置，本轮未做；计划允许 FFI 直连系统 MIDI 作为替代，属后续。
+- **编排视图 UI**（Playlist 块拖拽摆放）与**卷帘量化/摇摆/力度/工具/幽灵音符** UI
+  仍未做；模型层与 `playlist_engine` 已就位。
+- 本轮**未**触碰 `models/project.dart` / `lgdf_project_codec.dart` 的序列化面。
+

@@ -11,6 +11,8 @@ import 'package:path_provider/path_provider.dart';
 import '../models/project.dart';
 import '../models/track.dart';
 import '../models/note.dart';
+import '../models/pattern.dart';
+import '../models/musical_time.dart';
 import '../models/instrument.dart';
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
@@ -18,6 +20,10 @@ import '../engine/audio_engine_adapter.dart';
 import '../services/lgdf_format.dart';
 import '../services/project_serializer.dart';
 import '../services/workspace_service.dart';
+import '../services/midi/smf_reader.dart';
+import '../services/midi/smf_writer.dart';
+import '../services/midi/smf_types.dart';
+import '../services/midi_file_service.dart';
 import 'workspace_provider.dart';
 import '../services/synth_engine.dart' show TrackCompressorParams;
 import 'settings_provider.dart';
@@ -250,6 +256,115 @@ class ProjectNotifier extends Notifier<Project> with _ProjectHistoryMixin {
 
   void addTrack({String? name, String? audioFilePath}) {
     addAudioTrack(name: name, audioFilePath: audioFilePath);
+  }
+
+  // ── MIDI import / export (PLAN §3.S6c) ──
+
+  /// Imports a MIDI file, adding one track per MIDI track.
+  ///
+  /// Returns the number of tracks added, or `null` when the user cancels.
+  /// Throws [SmfFormatException] when the bytes are not a usable MIDI file; the
+  /// caller shows that to the user rather than importing nothing silently.
+  Future<int?> importMidiFile() async {
+    final picked = await MidiFileService().pickMidiFile();
+    if (picked == null) return null;
+    return importMidiBytes(picked.bytes, fileName: picked.name);
+  }
+
+  /// Imports MIDI [bytes], adding one track per MIDI track.
+  ///
+  /// Separated from the picker so it can be tested without a file dialog.
+  int importMidiBytes(Uint8List bytes, {String fileName = 'import.mid'}) {
+    final file = SmfReader.parse(bytes);
+    final data = smfToPatterns(file, nameFor: (i) => 'MIDI ${i + 1}');
+    if (data.isEmpty) return 0;
+
+    _pushUndo();
+    _markDirty();
+
+    final baseName =
+        fileName.replaceAll(RegExp(r'\.(mid|midi)$', caseSensitive: false), '');
+    final trackColors = _trackColors();
+    final newTracks = <Track>[];
+    final newPatterns = <Pattern>[];
+
+    for (var i = 0; i < data.patterns.length; i++) {
+      final pattern = data.patterns[i];
+      // The synth pipeline reads `startTime` / `duration`, derived from the
+      // file's tempo, so re-derive the seconds view at that tempo.
+      final notes = pattern.notes.map((n) => n.withTempo(data.bpm)).toList();
+      newPatterns.add(pattern.copyWith(notes: notes));
+      final index = state.tracks.length + newTracks.length;
+      newTracks.add(Track(
+        id: _uuid.v4(),
+        name: pattern.name.isEmpty
+            ? (data.patterns.length == 1 ? baseName : '$baseName ${i + 1}')
+            : pattern.name,
+        type: TrackType.instrument,
+        instrumentName: 'piano',
+        notes: notes,
+        volume: 0.8,
+        color: trackColors[index % trackColors.length],
+        stepPattern: List.generate(16, (_) => false),
+      ));
+    }
+
+    state = state.copyWith(
+      tracks: [...state.tracks, ...newTracks],
+      patterns: [...state.patterns, ...newPatterns],
+      bpm: data.bpm,
+      timeSignatureNumerator: data.timeSignature?.$1,
+      timeSignatureDenominator: data.timeSignature?.$2,
+    );
+    AppLogger.i('Imported MIDI "$fileName": ${newTracks.length} tracks');
+    return newTracks.length;
+  }
+
+  /// Writes the current patterns to a MIDI file chosen by the user.
+  ///
+  /// Returns the saved path, or `null` when the user cancels. Falls back to a
+  /// pattern derived from note-based tracks when the project has no
+  /// arrangement, so a legacy project can still export.
+  Future<String?> exportMidiFile() async {
+    final bytes = exportMidiBytes();
+    return MidiFileService()
+        .saveMidiFile(bytes, suggestedName: '${state.name}.mid');
+  }
+
+  /// Encodes the project's patterns as MIDI bytes.
+  ///
+  /// Exposed for tests and for callers that own their own save path.
+  Uint8List exportMidiBytes() {
+    var patterns = state.patterns;
+    if (patterns.isEmpty) {
+      // No arrangement: synthesise one pattern per note-based track so the
+      // export is not empty.
+      patterns = state.tracks
+          .where((t) => t.isInstrument && t.notes.isNotEmpty)
+          .map((t) => Pattern(
+                id: t.id,
+                name: t.name,
+                notes: t.notes,
+                lengthTicks: _midiPatternLength(t.notes),
+              ))
+          .toList();
+    }
+    return SmfWriter.write(
+      patterns: patterns,
+      bpm: state.bpm,
+      timeSignature: (
+        state.timeSignatureNumerator,
+        state.timeSignatureDenominator,
+      ),
+    );
+  }
+
+  /// Rounds a note list's end up to whole bars, for an export pattern length.
+  int _midiPatternLength(List<Note> notes) {
+    if (notes.isEmpty) return Ticks.ppq * 4;
+    final end = notes.map((n) => n.endTicks).reduce((a, b) => a > b ? a : b);
+    final bar = Ticks.barTicks(4);
+    return ((end + bar - 1) ~/ bar) * bar;
   }
 
   Future<void> removeTrack(String trackId) async {
