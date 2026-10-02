@@ -57,6 +57,23 @@ jobs:
       - name: Test
         run: flutter test --reporter expanded
 
+  # ── Web 构建门禁 ──
+  #
+  # web 目标曾长期无法编译（条件导入、接口分歧），而 `flutter analyze` 不会发现
+  # 平台解析后的类型错误。这一步保证 web 至少能构建出产物——是 S1.5「Web 可用」的
+  # 最低保障（实时播放还需 worklet/WASM 流水线）。
+  web-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Get dependencies
+        run: flutter pub get
+      - name: Build for the web
+        run: flutter build web --release
+
   # ── Rust 门禁 ──
   #
   # 覆盖 §8.3 要求的四步：clippy（零 warning）、test、以及作为 Web 端唯一自动化
