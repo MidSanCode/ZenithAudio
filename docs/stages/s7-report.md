@@ -51,7 +51,7 @@ S7 要求「插件 ABI 抽象层 + CLAP 宿主」。`PluginHost`/`PluginInstance
 1. **CLAP FFI 加载器**：真正 `dlopen` 插件二进制、调用 CLAP 入口、把参数桥接到 S2 参数存储、把延迟桥接到 S4 S5 PDC。**需要 CLAP SDK/头**，本机离线且不安装依赖，故未做。这是 S7 剩下的一块。
 2. **插件 UI 嵌入**：对外窗口嵌入，需加载器与平台窗口 API。
 3. **沙箱化（子进程隔离，P1）**：需加载器。
-4. **工程集成**：`PluginSlotBank` 尚未接入 `Project` 的序列化面（`spec/project.json`）；接入属后续。数据层已就绪，接入是加一个可选字段。
+4. **工程集成**：✅ **已接入**——`Project.pluginSlots`（可选字段）写入/读回 `lgdf_project_codec` 的 `plugin_slots`；有文档往返测试。旧工程无此键照常解析。
 
 ---
 

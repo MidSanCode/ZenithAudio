@@ -2,6 +2,7 @@ import 'dart:math';
 import 'pattern.dart';
 import 'playlist.dart';
 import 'track.dart';
+import '../plugins/plugin_slot.dart';
 
 class Project {
   final String id;
@@ -25,6 +26,10 @@ class Project {
   /// Arrangement layer. null for legacy projects.
   final Playlist? playlist;
 
+  /// Plugin slots by track id (S7). null for projects with no plugins, which
+  /// keeps the document byte-identical to what older versions wrote.
+  final PluginSlotBank? pluginSlots;
+
   const Project({
     required this.id,
     required this.name,
@@ -37,6 +42,7 @@ class Project {
     this.playbackSpeed = 1.0,
     this.patterns = const [],
     this.playlist,
+    this.pluginSlots,
   });
 
   /// True when the project carries the Pattern + Playlist arrangement layer.
@@ -63,6 +69,7 @@ class Project {
     double? playbackSpeed,
     List<Pattern>? patterns,
     Playlist? playlist,
+    PluginSlotBank? pluginSlots,
   }) {
     return Project(
       id: id ?? this.id,
@@ -78,6 +85,7 @@ class Project {
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       patterns: patterns ?? this.patterns,
       playlist: playlist ?? this.playlist,
+      pluginSlots: pluginSlots ?? this.pluginSlots,
     );
   }
 

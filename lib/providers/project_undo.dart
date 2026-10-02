@@ -47,6 +47,7 @@ mixin _ProjectHistoryMixin on Notifier<Project> {
       playbackSpeed: p.playbackSpeed,
       patterns: p.patterns,
       playlist: p.playlist,
+      pluginSlots: p.pluginSlots,
     );
   }
 

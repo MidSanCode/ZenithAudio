@@ -7,6 +7,7 @@ import '../models/pattern.dart';
 import '../models/playlist.dart';
 import '../models/project.dart';
 import '../models/track.dart';
+import '../plugins/plugin_slot.dart';
 import 'lgdf_format.dart';
 import 'synth_engine.dart' show TrackCompressorParams;
 
@@ -48,6 +49,16 @@ class LgdfProjectCodec {
         for (final t in project.tracks)
           buildTrack(t, trackAssetPaths, bpm: project.bpm),
       ],
+      // S6 arrangement layer. Optional: omitted when empty, so a legacy or
+      // arrangement-less project writes the same document it always did and an
+      // older reader is unaffected.
+      if (project.patterns.isNotEmpty)
+        'patterns': project.patterns.map((p) => p.toJson()).toList(),
+      if (project.playlist != null) 'playlist': project.playlist!.toJson(),
+      // S7 plugin slots (optional, empty by default).
+      if (project.pluginSlots != null &&
+          !project.pluginSlots!.isEmpty)
+        'plugin_slots': project.pluginSlots!.toJson(),
     };
   }
 
@@ -257,6 +268,10 @@ class LgdfProjectCodec {
       playlist: doc['playlist'] == null
           ? null
           : Playlist.fromJson(doc['playlist'] as Map<String, dynamic>),
+      pluginSlots: doc['plugin_slots'] == null
+          ? null
+          : PluginSlotBank.fromJson(
+              Map<String, dynamic>.from(doc['plugin_slots'] as Map)),
     );
   }
 
