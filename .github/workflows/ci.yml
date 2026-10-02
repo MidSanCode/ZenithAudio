@@ -53,7 +53,11 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
       - name: Analyze (must be zero errors)
-        run: flutter analyze
+        # The gate is "zero errors", not "zero lints": the repo carries a known
+        # baseline of info/warning lints. `flutter analyze` defaults to treating
+        # both as fatal, which failed CI on the baseline rather than on the
+        # change. Errors still fail.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - name: Test
         run: flutter test --reporter expanded
 

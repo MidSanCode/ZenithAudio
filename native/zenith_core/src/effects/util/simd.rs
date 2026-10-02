@@ -34,6 +34,14 @@
 //! reassociation error a fused multiply-add introduces.
 
 /// The number of `f32` lanes each SIMD path processes at once.
+///
+/// Only the `aarch64` and `wasm32` kernels use it; on the scalar-only targets
+/// (notably the x86_64 CI runner) there is no SIMD path to size, and leaving it
+/// ungated made it dead code there — which `cargo clippy -D warnings` (the CI
+/// gate) rejects. Gating it to the architectures that consume it keeps the
+/// scalar build warning-free without an `#[allow]` that would hide a real
+/// regression.
+#[cfg(any(target_arch = "aarch64", target_arch = "wasm32"))]
 const LANES: usize = 4;
 
 /// Multiplies every element of `samples` by `gain`.
