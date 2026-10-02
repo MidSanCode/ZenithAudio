@@ -205,6 +205,19 @@
 
   "common.close": "关闭",
 
+  "degrade.title": "检测到音频卡顿，已自动停用重型渲染",
+  "degrade.titleForced": "正在超出音频安全上限（你选择保留全部功能）",
+  "degrade.disabled": "已停用：{features}",
+  "degrade.restore": "恢复",
+  "degrade.stillEnable": "仍要启用",
+  "degrade.lowerQuality": "降低采样率 / 增大缓冲",
+  "degrade.feature.convolutionReverb": "卷积混响",
+  "degrade.feature.oversampledDistortion": "过采样失真",
+  "degrade.feature.highRatioTimeStretch": "高倍率时间拉伸",
+  "degrade.feature.sendBuses": "发送/返回总线",
+  "degrade.feature.realtimeEffects": "实时效果链",
+  "degrade.feature.extendedPolyphony": "扩展复音数",
+
   "common.ok": "确定",
 
   "settings.autoSave": "自动保存",

@@ -12,6 +12,7 @@ import 'screens/editor_screen.dart';
 import 'screens/workspace_screen.dart';
 import 'services/project_serializer.dart';
 import 'services/single_instance.dart';
+import 'widgets/degrade/audio_degradation_banner.dart';
 
 class ZenithAudioApp extends ConsumerStatefulWidget {
   const ZenithAudioApp({super.key, this.initialProjectPath});
@@ -125,7 +126,18 @@ class _ZenithAudioAppState extends ConsumerState<ZenithAudioApp>
       locale: context.locale,
       // The app opens on the workspace home screen (recent projects, new/open)
       // and pushes the editor on top of it once a project is loaded.
+      //
+      // The degradation banner is injected above whatever page is showing, via
+      // `builder`, so it is present on every screen without each screen
+      // remembering to add it. It is a sibling of the page (a Column), not an
+      // overlay, so it pushes content down instead of covering the toolbar.
       home: const WorkspaceScreen(),
+      builder: (context, child) => Column(
+        children: [
+          const AudioDegradationBanner(),
+          Expanded(child: child ?? const SizedBox.shrink()),
+        ],
+      ),
     );
   }
 }

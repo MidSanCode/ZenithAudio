@@ -204,6 +204,19 @@
 
   "common.close": "Close",
 
+  "degrade.title": "Audio stutter detected — heavy rendering has been disabled",
+  "degrade.titleForced": "Running past the safe audio limit (you chose to keep everything enabled)",
+  "degrade.disabled": "Disabled: {features}",
+  "degrade.restore": "Restore",
+  "degrade.stillEnable": "Still enable",
+  "degrade.lowerQuality": "Lower sample rate / larger buffer",
+  "degrade.feature.convolutionReverb": "convolution reverb",
+  "degrade.feature.oversampledDistortion": "oversampled distortion",
+  "degrade.feature.highRatioTimeStretch": "high-ratio time stretch",
+  "degrade.feature.sendBuses": "send/return buses",
+  "degrade.feature.realtimeEffects": "real-time effects",
+  "degrade.feature.extendedPolyphony": "extended polyphony",
+
   "common.ok": "OK",
 
   "settings.autoSave": "Auto Save",
