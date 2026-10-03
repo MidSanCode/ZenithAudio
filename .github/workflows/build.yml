@@ -171,14 +171,16 @@ jobs:
         run: flutter pub get
       - name: Install Rust target for the core (android)
         run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-      - name: Configure Android NDK linker for Rust
-        run: |
-          NDK="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$NDK/armv7a-linux-androideabi24-clang" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$NDK/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
       - name: Build APK
-        run: flutter build apk --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
+        run: |
+          # The Rust core is cross-compiled by hook/build.dart. Flutter's
+          # hooks_runner can run the hook under a filtered environment, so the
+          # linker is passed both as a shell export (inherited by `flutter`
+          # and its hook subprocess) and consumed by the hook as a --config.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+          flutter build apk --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
       - uses: actions/upload-artifact@v4
         with:
           name: zenith-audio-Android

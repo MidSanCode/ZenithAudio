@@ -51,18 +51,32 @@ void main(List<String> args) async {
     );
     if (!targetDir.existsSync()) targetDir.createSync(recursive: true);
 
+    // Allow an explicit linker override via the standard Cargo environment
+    // variable (e.g. CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER when
+    // cross-compiling from the Android NDK). Pass it as a --config argument so
+    // it is honored even if the child `cargo` process does not inherit the
+    // variable (Flutter's hooks_runner can run the hook through a filtered
+    // environment).
+    final linkerEnvKey =
+        'CARGO_TARGET_${rustTriple.toUpperCase().replaceAll('-', '_').replaceAll('.', '_')}_LINKER';
+    final linker = Platform.environment[linkerEnvKey];
+    final configArgs = <String>[
+      'build',
+      '--manifest-path',
+      manifest.path,
+      '--target',
+      rustTriple,
+      '--target-dir',
+      targetDir.path,
+      if (isRelease) '--release',
+      if (linker != null && linker.isNotEmpty)
+        '--config',
+        'target.$rustTriple.linker="$linker"',
+    ];
+
     final result = await Process.run(
       'cargo',
-      <String>[
-        'build',
-        '--manifest-path',
-        manifest.path,
-        '--target',
-        rustTriple,
-        '--target-dir',
-        targetDir.path,
-        if (isRelease) '--release',
-      ],
+      configArgs,
       workingDirectory: packageRoot.path,
       runInShell: targetOS == OS.windows,
     );
