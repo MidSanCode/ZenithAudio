@@ -171,16 +171,37 @@ jobs:
         run: flutter pub get
       - name: Install Rust target for the core (android)
         run: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-      - name: Build APK
+      - name: Configure the Android NDK linker for cargo
         run: |
-          # The Rust core is cross-compiled by hook/build.dart. Flutter's
-          # hooks_runner can run the hook under a filtered environment, so the
-          # linker is passed both as a shell export (inherited by `flutter`
-          # and its hook subprocess) and consumed by the hook as a --config.
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
-          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
-          flutter build apk --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
+          # The Rust core is cross-compiled by hook/build.dart when Gradle runs
+          # assembleRelease. Flutter's hooks_runner can filter the environment
+          # passed to the hook, so CARGO_TARGET_*_LINKER env vars are unreliable.
+          # Instead, write a per-target linker config into $CARGO_HOME/config.toml,
+          # which every cargo call (including the hook's) reads unconditionally.
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          CONFIG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          # Only add the [target.*] table if this job has not already written one.
+          if ! grep -q 'aarch64-linux-android' "$CONFIG" 2>/dev/null; then
+            cat >> "$CONFIG" <<'EOF'
+
+[target."aarch64-linux-android"]
+linker = "PLACEHOLDER_AARCH64"
+
+[target."armv7-linux-androideabi"]
+linker = "PLACEHOLDER_ARMV7"
+
+[target."x86_64-linux-android"]
+linker = "PLACEHOLDER_X64"
+EOF
+            sed -i "s|PLACEHOLDER_AARCH64|$NDK_BIN/aarch64-linux-android24-clang|" "$CONFIG"
+            sed -i "s|PLACEHOLDER_ARMV7|$NDK_BIN/armv7a-linux-androideabi24-clang|" "$CONFIG"
+            sed -i "s|PLACEHOLDER_X64|$NDK_BIN/x86_64-linux-android24-clang|" "$CONFIG"
+          fi
+          echo "Cargo config at $CONFIG:"
+          grep -A2 '^\[target' "$CONFIG" || true
+      - name: Build APK
+        run: flutter build apk --release --build-name=$BUILD_NAME --build-number=$BUILD_NUMBER
       - uses: actions/upload-artifact@v4
         with:
           name: zenith-audio-Android
