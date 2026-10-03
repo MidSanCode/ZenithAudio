@@ -117,27 +117,19 @@ String _libraryFileName(OS targetOS) {
 /// Throwing on an unmapped pair is deliberate: silently falling back to the
 /// host triple would link a library built for the wrong architecture.
 String _rustTriple(OS os, Architecture arch) {
-  final archName = switch (arch) {
-    Architecture.arm64 => 'aarch64',
-    Architecture.x64 => 'x86_64',
-    Architecture.arm => 'armv7',
-    Architecture.ia32 => 'i686',
-    Architecture.riscv64 => 'riscv64gc',
+  return switch ((os, arch)) {
+    (OS.windows, Architecture.x64) => 'x86_64-pc-windows-msvc',
+    (OS.linux, Architecture.x64) => 'x86_64-unknown-linux-gnu',
+    (OS.linux, Architecture.arm64) => 'aarch64-unknown-linux-gnu',
+    (OS.macOS, Architecture.arm64) => 'aarch64-apple-darwin',
+    (OS.macOS, Architecture.x64) => 'x86_64-apple-darwin',
+    (OS.iOS, Architecture.arm64) => 'aarch64-apple-ios',
+    (OS.android, Architecture.arm64) => 'aarch64-linux-android',
+    (OS.android, Architecture.arm) => 'armv7-linux-androideabi',
+    (OS.android, Architecture.x64) => 'x86_64-linux-android',
+    (OS.android, Architecture.ia32) => 'i686-linux-android',
     _ => throw BuildError(
-        message: 'Unsupported architecture for the Rust core: $arch',
+        message: 'Unsupported OS/architecture for the Rust core: $os / $arch',
       ),
   };
-
-  final osName = switch (os) {
-    OS.windows => 'pc-windows-msvc',
-    OS.linux => 'unknown-linux-gnu',
-    OS.macOS => 'apple-darwin',
-    OS.android => 'linux-androideabi',
-    OS.iOS => 'apple-ios',
-    _ => throw BuildError(
-        message: 'Unsupported OS for the Rust core: $os',
-      ),
-  };
-
-  return '$archName-$osName';
 }
